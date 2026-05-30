@@ -173,45 +173,6 @@ function updateW({w1,b1,w2,b2}, x, a2, {d2,d3}, lr) {
   }
 }
 
-function excelBatchUpdate(w, lr) {
-  // Excel 학습 시트 방식:
-  // 1) 현재 weight로 64개 전체 샘플의 ∂C/∂w, ∂C/∂b를 모두 계산
-  // 2) 그 기울기를 전부 합산
-  // 3) 마지막에 한 번만 w_new = w_old - η·∂CT/∂w 적용
-  // 현재 gradsOf()의 d2/d3는 -(∂C/∂z)이므로 update는 + lr * d 로 적용하면 Excel의 w - η∂C와 같음.
-  const sum = {
-    w1: Array.from({length:3}, () => Array(12).fill(0)),
-    b1: Array(3).fill(0),
-    w2: Array.from({length:2}, () => Array(3).fill(0)),
-    b2: Array(2).fill(0),
-  }
-  let loss = 0
-
-  for (const s of SAMPLES) {
-    const f = fwdPass(s.pixels, w)
-    const g = gradsOf(s.pixels, f.a2, f.a3, s.target, w.w2)
-    loss += g.loss
-
-    for (let i=0; i<3; i++) {
-      for (let j=0; j<12; j++) sum.w1[i][j] += g.d2[i] * s.pixels[j]
-      sum.b1[i] += g.d2[i]
-    }
-    for (let k=0; k<2; k++) {
-      for (let i=0; i<3; i++) sum.w2[k][i] += g.d3[k] * f.a2[i]
-      sum.b2[k] += g.d3[k]
-    }
-  }
-
-  const next = {
-    w1: w.w1.map((row,i) => row.map((v,j) => r4(v + lr * sum.w1[i][j]))),
-    b1: w.b1.map((v,i) => r4(v + lr * sum.b1[i])),
-    w2: w.w2.map((row,k) => row.map((v,i) => r4(v + lr * sum.w2[k][i]))),
-    b2: w.b2.map((v,k) => r4(v + lr * sum.b2[k])),
-  }
-
-  return { w: next, loss: r4(loss) }
-}
-
 // ─── Primitive UI ─────────────────────────────────────────────────────────────
 const Card = ({children, style={}}) => (
   <div style={{background:C.bg2, borderRadius:16, border:`1px solid ${C.border}`, ...style}}>
@@ -381,24 +342,26 @@ export default function BackpropVisualizerPage() {
       setGr(g); setHist(h=>[...h.slice(-299),g.loss]); setStep(4); return
     }
     if(step===4){ setStep(5); return }
-    const res = excelBatchUpdate(W, lr)
-    setW(res.w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),res.loss]); setStep(0)
+    const g = gr ?? gradsOf(inp,fwd.a2,fwd.a3,tgt,W.w2)
+    setW(updateW(W,inp,fwd.a2,g,lr)); setEp(e=>e+1); setStep(0)
   }
 
   function train1() {
-    const res = excelBatchUpdate(W, lr)
-    setW(res.w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),res.loss]); setStep(0)
+    let w=W, loss=0
+    for(const s of SAMPLES){ const f=fwdPass(s.pixels,w); const g=gradsOf(s.pixels,f.a2,f.a3,s.target,w.w2); w=updateW(w,s.pixels,f.a2,g,lr); loss+=g.loss }
+    setW(w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),r4(loss/SAMPLES.length)]); setStep(0)
   }
 
   async function trainN(n) {
     autoRef.current=true; setAuto(true)
-    let w=W, count=0, loss=0
+    let w=W, count=0
     while(autoRef.current && count<n){
-      const res = excelBatchUpdate(w, lr)
-      w = res.w; loss = res.loss; count++
-      if(count%20===0){ setW({...w}); setEp(e=>e+20); setHist(h=>[...h.slice(-299),loss]); await new Promise(r=>setTimeout(r,1)) }
+      let loss=0
+      for(const s of SAMPLES){ const f=fwdPass(s.pixels,w); const g=gradsOf(s.pixels,f.a2,f.a3,s.target,w.w2); w=updateW(w,s.pixels,f.a2,g,lr); loss+=g.loss }
+      count++
+      if(count%20===0){ setW({...w}); setEp(e=>e+20); setHist(h=>[...h.slice(-299),r4(loss/SAMPLES.length)]); await new Promise(r=>setTimeout(r,1)) }
     }
-    setW({...w}); setEp(e=>e+count%20); setHist(h=>[...h.slice(-299),loss]); autoRef.current=false; setAuto(false)
+    setW({...w}); setEp(e=>e+count%20); autoRef.current=false; setAuto(false)
   }
 
   function reset() { autoRef.current=false; setAuto(false); setW(mkWeights()); setFwd(null); setGr(null); setStep(0); setHist([]); setEp(0) }
@@ -431,7 +394,7 @@ export default function BackpropVisualizerPage() {
             <Tag bg='#ecfdf5' color={C.green}>12 → 3 → 2</Tag>
           </div>
           <p style={{fontSize:13,color:C.text2,margin:0,lineHeight:1.6}}>
-            Excel 예제처럼 64개 전체 샘플의 기울기를 합산한 뒤 한 번에 weight를 갱신합니다.
+            Excel 예제의 역전파 계산 과정을 웹에서 단계별로 재현합니다.
             4×3 픽셀 입력 → 은닉층 3개 → 출력층 2개 → 숫자 0 또는 1 예측.
           </p>
         </div>
