@@ -278,190 +278,6 @@ function LossCurve({history, epoch}) {
   return <canvas ref={ref} width={500} height={60} style={{width:'100%',borderRadius:8,display:'block'}}/>
 }
 
-// ─── Performance Panel ────────────────────────────────────────────────────────
-function PerformancePanel({ evalMetrics, ep, hist }) {
-  const [detailFilter, setDetailFilter] = useState('전체')
-
-  if (ep === 0 || !evalMetrics) {
-    return (
-      <div style={{
-        display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-        padding:'60px 20px', gap:12,
-        background:C.bg2, borderRadius:16, border:`1px solid ${C.border}`,
-      }}>
-        <div style={{fontSize:36}}>🎯</div>
-        <div style={{fontSize:15, fontWeight:700, color:C.text}}>학습이 필요합니다</div>
-        <div style={{fontSize:12, color:C.text2, textAlign:'center', lineHeight:1.7}}>
-          오른쪽 사이드바에서 <strong>Train 1 Epoch</strong> 또는<br/>
-          <strong>Auto Train</strong>을 실행한 뒤 이 탭을 확인하세요.
-        </div>
-      </div>
-    )
-  }
-
-  const { tp, tn, fp, fn, accPct, precPct, recPct, f1Pct, details } = evalMetrics
-  const filtered = details.filter(d =>
-    detailFilter === '전체' ? true :
-    detailFilter === '정답' ? d.ok :
-    detailFilter === '오답' ? !d.ok :
-    String(d.trueLabel) === detailFilter
-  )
-
-  const MetricCard = ({ label, value, sub, color }) => (
-    <div style={{background:C.bg3, borderRadius:12, padding:'14px 16px', textAlign:'center'}}>
-      <div style={{fontSize:10, color:C.text3, letterSpacing:1, marginBottom:6}}>{label}</div>
-      <div style={{fontSize:28, fontWeight:800, color: color ?? C.accent, fontFamily:"'DM Mono',monospace"}}>
-        {value}
-      </div>
-      {sub && <div style={{fontSize:10, color:C.text3, marginTop:4}}>{sub}</div>}
-    </div>
-  )
-
-  const barColor = pct => pct >= 90 ? C.green : pct >= 70 ? C.orange : C.danger
-
-  return (
-    <div style={{display:'flex', flexDirection:'column', gap:14}}>
-
-      {/* 핵심 지표 4개 */}
-      <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10}}>
-        <MetricCard label='ACCURACY'  value={`${accPct.toFixed(1)}%`}  sub={`${tp+tn}/${tp+tn+fp+fn} 정답`} color={barColor(accPct)} />
-        <MetricCard label='PRECISION' value={`${precPct.toFixed(1)}%`} sub='숫자 1 정밀도' color={barColor(precPct)} />
-        <MetricCard label='RECALL'    value={`${recPct.toFixed(1)}%`}  sub='숫자 1 재현율' color={barColor(recPct)} />
-        <MetricCard label='F1 SCORE'  value={`${f1Pct.toFixed(1)}%`}   sub='정밀도·재현율 조화평균' color={barColor(f1Pct)} />
-      </div>
-
-      {/* 혼동 행렬 + 클래스별 정확도 */}
-      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
-
-        {/* Confusion Matrix */}
-        <Card style={{padding:16}}>
-          <Lbl>CONFUSION MATRIX</Lbl>
-          <div style={{display:'grid', gridTemplateColumns:'auto 1fr 1fr', gap:3, fontSize:11}}>
-            <div style={{padding:'4px 8px'}}/>
-            <div style={{padding:'4px 8px', textAlign:'center', color:C.text3, fontWeight:600, fontSize:10}}>예측: 0</div>
-            <div style={{padding:'4px 8px', textAlign:'center', color:C.text3, fontWeight:600, fontSize:10}}>예측: 1</div>
-            <div style={{padding:'8px', color:C.text3, fontWeight:600, fontSize:10, display:'flex', alignItems:'center'}}>실제: 0</div>
-            <div style={{background:'#ecfdf5', borderRadius:8, padding:'14px', textAlign:'center'}}>
-              <div style={{fontSize:24, fontWeight:800, color:C.green}}>{tn}</div>
-              <div style={{fontSize:9, color:C.green, marginTop:2}}>TN</div>
-            </div>
-            <div style={{background:'#fff1f2', borderRadius:8, padding:'14px', textAlign:'center'}}>
-              <div style={{fontSize:24, fontWeight:800, color:C.danger}}>{fp}</div>
-              <div style={{fontSize:9, color:C.danger, marginTop:2}}>FP</div>
-            </div>
-            <div style={{padding:'8px', color:C.text3, fontWeight:600, fontSize:10, display:'flex', alignItems:'center'}}>실제: 1</div>
-            <div style={{background:'#fff1f2', borderRadius:8, padding:'14px', textAlign:'center'}}>
-              <div style={{fontSize:24, fontWeight:800, color:C.danger}}>{fn}</div>
-              <div style={{fontSize:9, color:C.danger, marginTop:2}}>FN</div>
-            </div>
-            <div style={{background:'#ecfdf5', borderRadius:8, padding:'14px', textAlign:'center'}}>
-              <div style={{fontSize:24, fontWeight:800, color:C.green}}>{tp}</div>
-              <div style={{fontSize:9, color:C.green, marginTop:2}}>TP</div>
-            </div>
-          </div>
-          <div style={{marginTop:10, fontSize:10, color:C.text3, lineHeight:1.7}}>
-            TN/TP = 올바른 예측 &nbsp;·&nbsp; FP = 0을 1로 오분류 &nbsp;·&nbsp; FN = 1을 0으로 오분류
-          </div>
-        </Card>
-
-        {/* 클래스별 정확도 바 */}
-        <Card style={{padding:16}}>
-          <Lbl>클래스별 정확도</Lbl>
-          {[
-            { label:'숫자 0', total:32, correct: tn, color:C.accent },
-            { label:'숫자 1', total:32, correct: tp, color:C.green  },
-          ].map(({ label, total, correct, color }) => {
-            const pct = r4(correct / total * 100)
-            return (
-              <div key={label} style={{marginBottom:16}}>
-                <div style={{display:'flex', justifyContent:'space-between', marginBottom:6}}>
-                  <span style={{fontSize:12, fontWeight:600, color:C.text}}>{label}</span>
-                  <span style={{fontSize:12, fontWeight:700, color:barColor(pct), fontFamily:"'DM Mono',monospace"}}>
-                    {correct}/{total} ({pct.toFixed(1)}%)
-                  </span>
-                </div>
-                <div style={{background:C.bg3, borderRadius:99, height:10, overflow:'hidden'}}>
-                  <div style={{
-                    width:`${pct}%`, height:'100%', borderRadius:99,
-                    background: barColor(pct), transition:'width .5s ease',
-                  }}/>
-                </div>
-              </div>
-            )
-          })}
-          <div style={{marginTop:8, padding:'10px 12px', background:C.bg3, borderRadius:10}}>
-            <div style={{fontSize:10, color:C.text3, marginBottom:4}}>현재 학습 epoch</div>
-            <div style={{fontSize:20, fontWeight:800, color:C.accent, fontFamily:"'DM Mono',monospace"}}>{ep}</div>
-            {hist.length > 0 && (
-              <div style={{fontSize:10, color:C.text3, marginTop:4}}>
-                마지막 Loss: <span style={{color:hist[hist.length-1]<.05?C.green:C.danger, fontWeight:700}}>
-                  {hist[hist.length-1].toFixed(5)}
-                </span>
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
-
-      {/* 샘플별 예측 결과 테이블 */}
-      <Card style={{padding:16}}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, flexWrap:'wrap', gap:8}}>
-          <Lbl style={{marginBottom:0}}>샘플별 예측 결과 ({filtered.length}개)</Lbl>
-          <div style={{display:'flex', gap:5}}>
-            {['전체','0','1','정답','오답'].map(tab => (
-              <button key={tab} onClick={()=>setDetailFilter(tab)} style={{
-                padding:'3px 10px', borderRadius:99, fontSize:10, fontWeight:600, cursor:'pointer',
-                background: detailFilter===tab ? C.tagBg : C.bg,
-                color:       detailFilter===tab ? C.accent : C.text3,
-                border:`1.5px solid ${detailFilter===tab ? C.accent : C.border}`,
-                transition:'all .2s',
-              }}>{tab === '정답' ? `✓ 정답 (${details.filter(d=>d.ok).length})` : tab === '오답' ? `✗ 오답 (${details.filter(d=>!d.ok).length})` : tab === '전체' ? `전체 (${details.length})` : `숫자 ${tab} (32)`}</button>
-            ))}
-          </div>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{borderCollapse:'collapse', fontSize:11, width:'100%', fontFamily:"'DM Mono',monospace"}}>
-            <thead>
-              <tr style={{borderBottom:`1.5px solid ${C.border}`}}>
-                {['#','이미지','정답','out₀','out₁','예측','결과'].map(h => (
-                  <th key={h} style={{padding:'6px 10px', color:C.text3, fontWeight:600, textAlign: h==='이미지'?'left':'center', fontSize:10}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(d => (
-                <tr key={d.idx} style={{borderBottom:`1px solid ${C.border}`, background: d.ok ? 'transparent' : '#fff8f8'}}>
-                  <td style={{padding:'6px 10px', color:C.text3, textAlign:'center'}}>{d.idx+1}</td>
-                  <td style={{padding:'6px 10px'}}>
-                    <div style={{display:'grid', gridTemplateColumns:'repeat(3,8px)', gap:1}}>
-                      {SAMPLES[d.idx].pixels.map((v,i) => (
-                        <div key={i} style={{width:8, height:8, borderRadius:1, background: v ? (d.trueLabel===1?C.green:C.accent) : C.bg3}}/>
-                      ))}
-                    </div>
-                  </td>
-                  <td style={{padding:'6px 10px', textAlign:'center', fontWeight:700, color:C.text}}>{d.trueLabel}</td>
-                  <td style={{padding:'6px 10px', textAlign:'center', color:d.out0>d.out1?C.accent:C.text3}}>{d.out0.toFixed(3)}</td>
-                  <td style={{padding:'6px 10px', textAlign:'center', color:d.out1>d.out0?C.green:C.text3}}>{d.out1.toFixed(3)}</td>
-                  <td style={{padding:'6px 10px', textAlign:'center', fontWeight:700, color: d.predLabel===d.trueLabel?C.text:C.danger}}>{d.predLabel}</td>
-                  <td style={{padding:'6px 10px', textAlign:'center'}}>
-                    <span style={{
-                      display:'inline-block', padding:'2px 8px', borderRadius:99,
-                      fontSize:10, fontWeight:700,
-                      background: d.ok ? '#ecfdf5' : '#fff1f2',
-                      color:      d.ok ? C.green   : C.danger,
-                    }}>{d.ok ? '✓ 정답' : '✗ 오답'}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-    </div>
-  )
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function BackpropVisualizerPage() {
   const [W,    setW]    = useState(mkWeights)
@@ -475,7 +291,6 @@ export default function BackpropVisualizerPage() {
   const [auto, setAuto] = useState(false)
   const [hov,  setHov]  = useState(null)
   const [sampleTab, setSampleTab] = useState('전체')
-  const [mainTab, setMainTab] = useState('visualizer')
   const autoRef = useRef(false)
 
   const smp = SAMPLES[si]
@@ -525,29 +340,6 @@ export default function BackpropVisualizerPage() {
     return `${n}/${SAMPLES.length}`
   })()
 
-  // ── Performance metrics (computed from all 64 samples) ──────────────────────
-  const evalMetrics = (() => {
-    if(ep === 0) return null
-    let tp=0, tn=0, fp=0, fn=0
-    const details = SAMPLES.map((s, idx) => {
-      const f = fwdPass(s.pixels, W)
-      const predLabel = f.a3[0] > f.a3[1] ? 0 : 1
-      const trueLabel = parseInt(s.label)
-      const ok = predLabel === trueLabel
-      if(trueLabel===1 && predLabel===1) tp++
-      else if(trueLabel===0 && predLabel===0) tn++
-      else if(trueLabel===0 && predLabel===1) fp++
-      else fn++
-      return { idx, trueLabel, predLabel, ok, out0: r4(f.a3[0]), out1: r4(f.a3[1]) }
-    })
-    const total   = tp + tn + fp + fn
-    const accPct  = r4((tp+tn)/total*100)
-    const precPct = (tp+fp)>0 ? r4(tp/(tp+fp)*100) : 0
-    const recPct  = (tp+fn)>0 ? r4(tp/(tp+fn)*100) : 0
-    const f1Pct   = (precPct+recPct)>0 ? r4(2*precPct*recPct/(precPct+recPct)) : 0
-    return { tp, tn, fp, fn, accPct, precPct, recPct, f1Pct, details }
-  })()
-
   return (
     /* Flex row: LEFT=main content  RIGHT=sidebar */
     <div style={{display:'flex', gap:14, alignItems:'flex-start'}}>
@@ -570,25 +362,7 @@ export default function BackpropVisualizerPage() {
           </p>
         </div>
 
-        {/* Main tab switcher */}
-        <div style={{display:'flex', gap:0, borderBottom:`1.5px solid ${C.border}`}}>
-          {[['visualizer','🔬 시각화'], ['performance','📊 성능 평가']].map(([id, label]) => {
-            const active = mainTab === id
-            return (
-              <button key={id} onClick={()=>setMainTab(id)} style={{
-                padding:'8px 20px', fontSize:13, fontWeight: active ? 700 : 500,
-                color: active ? C.accent : C.text3,
-                background:'transparent', border:'none',
-                borderBottom: active ? `2.5px solid ${C.accent}` : '2.5px solid transparent',
-                marginBottom:'-1.5px', cursor:'pointer', transition:'all .2s',
-              }}>{label}</button>
-            )
-          })}
-        </div>
-
-        {mainTab === 'performance' ? (
-          <PerformancePanel evalMetrics={evalMetrics} ep={ep} hist={hist} W={W} />
-        ) : (<>
+        {/* Step progress */}
         <Card style={{padding:'10px 16px'}}>
           <StepBar step={step}/>
         </Card>
@@ -884,7 +658,6 @@ export default function BackpropVisualizerPage() {
           ))}
         </div>
 
-        </>)}  {/* end visualizer tab */}
       </div>
 
       {/* ══ RIGHT: sidebar ══ */}
