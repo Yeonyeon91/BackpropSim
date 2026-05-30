@@ -1,928 +1,805 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 
-// ─── Math helpers ─────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+const LR_DEFAULT = 0.2
+
+// Training samples from Excel: 10 samples (5 zeros, 5 ones)
+// Each is a 4×3 = 12-pixel pattern (row-major: 4 rows × 3 cols)
+const SAMPLES = [
+  // "0" patterns (target: [1, 0])
+  { pixels: [1,1,1, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s1' },
+  { pixels: [0,1,1, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s2' },
+  { pixels: [1,1,0, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s3' },
+  { pixels: [1,1,1, 1,0,1, 1,0,1, 1,1,0], target: [1,0], label:'0', id:'s4' },
+  { pixels: [1,1,1, 1,0,1, 1,0,1, 0,1,1], target: [1,0], label:'0', id:'s5' },
+  // "1" patterns (target: [0, 1])
+  { pixels: [0,0,0, 0,1,1, 0,1,1, 0,1,1], target: [0,1], label:'1', id:'s6' },
+  { pixels: [0,1,1, 1,1,1, 0,1,1, 0,1,1], target: [0,1], label:'1', id:'s7' },
+  { pixels: [0,0,0, 1,1,0, 1,1,0, 1,1,0], target: [0,1], label:'1', id:'s8' },
+  { pixels: [0,0,0, 1,1,1, 1,1,1, 1,1,0], target: [0,1], label:'1', id:'s9' },
+  { pixels: [0,0,0, 1,1,1, 1,1,1, 0,1,1], target: [0,1], label:'1', id:'s10'},
+]
+
+const STEP_LABELS = [
+  { id: 0, title: 'INPUT',       icon: '🖼️' },
+  { id: 1, title: 'FORWARD',     icon: '→'  },
+  { id: 2, title: 'OUTPUT',      icon: '📊' },
+  { id: 3, title: 'LOSS',        icon: '⚡' },
+  { id: 4, title: 'BACKPROP',    icon: '←'  },
+  { id: 5, title: 'UPDATE W',    icon: '↺'  },
+]
+
+const STEP_DESCRIPTIONS = [
+  '입력 이미지는 12개의 숫자(0 또는 1)로 펼쳐져 신경망에 들어갑니다. 각 픽셀이 하나의 입력 노드가 됩니다.',
+  '각 입력 픽셀에 weight를 곱해 더한 뒤 sigmoid를 적용합니다. 은닉층은 픽셀들의 조합에서 특징을 추출합니다.',
+  '은닉층의 출력이 다시 weight를 거쳐 출력층으로 전달됩니다. out₀는 숫자 0일 가능성, out₁는 숫자 1일 가능성입니다.',
+  'Loss는 예측값이 정답과 얼마나 다른지를 나타냅니다. Loss가 클수록 예측이 틀린 것입니다.',
+  'Backpropagation은 오차를 뒤로 보내어 어떤 weight를 얼마나 고칠지 계산하는 과정입니다. chain rule로 각 weight의 기여를 계산합니다.',
+  'gradient 방향 반대로 weight를 수정합니다. 이 과정을 반복하면 점점 정답에 가까워집니다.',
+]
+
+const FORMULAS = [
+  ['입력', 'x₁, x₂, ..., x₁₂ ∈ {0, 1}'],
+  ['sigmoid', 'σ(z) = 1 / (1 + e⁻ᶻ)'],
+  ['은닉층', 'z₂ᵢ = Σ wᵢⱼ·xⱼ + bᵢ\na₂ᵢ = σ(z₂ᵢ)'],
+  ['출력층', 'z₃ₖ = Σ wₖᵢ·a₂ᵢ + bₖ\noutₖ = σ(z₃ₖ)'],
+  ['Loss', 'C = ½ Σ (target − out)²'],
+  ['δ₃ (출력)', 'δ₃ₖ = (targetₖ − outₖ) · outₖ · (1 − outₖ)'],
+  ['δ₂ (은닉)', 'δ₂ᵢ = (Σ δ₃ₖ · wₖᵢ) · a₂ᵢ · (1 − a₂ᵢ)'],
+  ['w 업데이트', 'w_new = w_old + η · δ · a_prev'],
+]
+
+// ─── Math ────────────────────────────────────────────────────────────────────
 const sigmoid = x => 1 / (1 + Math.exp(-x))
-const sigmoidDeriv = x => { const s = sigmoid(x); return s * (1 - s) }
-const relu = x => Math.max(0, x)
-const reluDeriv = x => x > 0 ? 1 : 0
-const tanh_ = x => Math.tanh(x)
-const tanhDeriv = x => 1 - Math.tanh(x) ** 2
+const r4 = v => Math.round(v * 10000) / 10000
+const r3 = v => Math.round(v * 1000) / 1000
 
-const ACTIVATIONS = {
-  sigmoid: { fn: sigmoid, deriv: sigmoidDeriv, label: 'Sigmoid' },
-  relu:    { fn: relu,    deriv: reluDeriv,    label: 'ReLU'    },
-  tanh:    { fn: tanh_,   deriv: tanhDeriv,    label: 'Tanh'    },
+function initWeights() {
+  // w1: [3][12], b1: [3]
+  // w2: [2][3],  b2: [2]
+  const rand = () => r4((Math.random() - 0.5) * 2)
+  const w1 = Array.from({ length: 3 }, () => Array.from({ length: 12 }, rand))
+  const b1 = Array.from({ length: 3 }, rand)
+  const w2 = Array.from({ length: 2 }, () => Array.from({ length: 3 }, rand))
+  const b2 = Array.from({ length: 2 }, rand)
+  return { w1, b1, w2, b2 }
 }
 
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
-const round4 = v => Math.round(v * 10000) / 10000
-const round2 = v => Math.round(v * 100) / 100
-
-// ─── Network architecture: 2 → 3 → 2 → 1 ────────────────────────────────────
-// Fixed small network so everything is visible
-const ARCH = [2, 3, 2, 1]
-
-function initNetwork() {
-  // weights[l][j][i] = weight from neuron i in layer l to neuron j in layer l+1
-  const weights = []
-  const biases  = []
-  for (let l = 0; l < ARCH.length - 1; l++) {
-    const W = []
-    const B = []
-    for (let j = 0; j < ARCH[l + 1]; j++) {
-      const row = []
-      for (let i = 0; i < ARCH[l]; i++) {
-        row.push(round4((Math.random() - 0.5) * 2))
-      }
-      W.push(row)
-      B.push(round4((Math.random() - 0.5) * 0.5))
-    }
-    weights.push(W)
-    biases.push(B)
-  }
-  return { weights, biases }
+function forward(inputs, w1, b1, w2, b2) {
+  // Hidden layer
+  const z2 = b1.map((b, i) => r4(b + w1[i].reduce((s, w, j) => s + w * inputs[j], 0)))
+  const a2 = z2.map(z => r4(sigmoid(z)))
+  // Output layer
+  const z3 = b2.map((b, i) => r4(b + w2[i].reduce((s, w, j) => s + w * a2[j], 0)))
+  const a3 = z3.map(z => r4(sigmoid(z)))
+  return { z2, a2, z3, a3 }
 }
 
-function forwardPass(inputs, weights, biases, activationKey) {
-  const act = ACTIVATIONS[activationKey]
-  // zs[l] = pre-activation values at layer l+1
-  // as[l] = post-activation values at layer l (as[0] = inputs)
-  const as = [inputs.slice()]
-  const zs = []
-
-  for (let l = 0; l < weights.length; l++) {
-    const z = []
-    const a = []
-    for (let j = 0; j < ARCH[l + 1]; j++) {
-      let sum = biases[l][j]
-      for (let i = 0; i < ARCH[l]; i++) {
-        sum += weights[l][j][i] * as[l][i]
-      }
-      z.push(round4(sum))
-      // Last layer: no activation (raw output)
-      a.push(l === weights.length - 1 ? round4(sum) : round4(act.fn(sum)))
-    }
-    zs.push(z)
-    as.push(a)
-  }
-
-  return { as, zs }
+function computeGrads(inputs, a2, a3, target, w2) {
+  // δ₃
+  const d3 = a3.map((o, k) => r4((target[k] - o) * o * (1 - o)))
+  // δ₂
+  const d2 = a2.map((a, i) => {
+    const sum = d3.reduce((s, d, k) => s + d * w2[k][i], 0)
+    return r4(sum * a * (1 - a))
+  })
+  // Loss
+  const loss = r4(0.5 * a3.reduce((s, o, k) => s + (target[k] - o) ** 2, 0))
+  return { d3, d2, loss }
 }
 
-function backwardPass(as, zs, weights, target, activationKey) {
-  const act = ACTIVATIONS[activationKey]
-  const numLayers = weights.length
-
-  // MSE loss: L = (pred - target)^2 / 2
-  const pred = as[as.length - 1][0]
-  const loss = round4(0.5 * (pred - target) ** 2)
-
-  // dLoss/da for each layer (gradient of loss w.r.t. activations)
-  const dAs = Array.from({ length: numLayers + 1 }, (_, i) => new Array(ARCH[i]).fill(0))
-  dAs[numLayers][0] = round4(pred - target)  // dL/dpred
-
-  // dW[l][j][i], dB[l][j]
-  const dWeights = weights.map(W => W.map(row => row.map(() => 0)))
-  const dBiases  = weights.map((W, l) => new Array(ARCH[l + 1]).fill(0))
-
-  for (let l = numLayers - 1; l >= 0; l--) {
-    for (let j = 0; j < ARCH[l + 1]; j++) {
-      // dL/dz_j
-      const dz = l === numLayers - 1
-        ? dAs[l + 1][j]
-        : round4(dAs[l + 1][j] * act.deriv(zs[l][j]))
-
-      dBiases[l][j] = round4(dz)
-
-      for (let i = 0; i < ARCH[l]; i++) {
-        dWeights[l][j][i] = round4(dz * as[l][i])
-        dAs[l][i] = round4(dAs[l][i] + dz * weights[l][j][i])
-      }
-    }
-  }
-
-  return { loss, dWeights, dBiases, dAs }
+function updateWeights({ w1, b1, w2, b2 }, inputs, a2, d2, d3, lr) {
+  const nw2 = w2.map((row, k) => row.map((w, i) => r4(w + lr * d3[k] * a2[i])))
+  const nb2 = b2.map((b, k) => r4(b + lr * d3[k]))
+  const nw1 = w1.map((row, i) => row.map((w, j) => r4(w + lr * d2[i] * inputs[j])))
+  const nb1 = b1.map((b, i) => r4(b + lr * d2[i]))
+  return { w1: nw1, b1: nb1, w2: nw2, b2: nb2 }
 }
 
-// ─── Canvas Neural Network Renderer ──────────────────────────────────────────
-function NetworkCanvas({
-  weights, as, dAs, dWeights,
-  highlightLayer, highlightNeuron,
-  phase, activeStep,
-  activationKey,
-  onNeuronClick,
-}) {
-  const canvasRef = useRef()
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    const W = canvas.width
-    const H = canvas.height
-
-    ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#f8f7ff'
-    ctx.fillRect(0, 0, W, H)
-
-    const layerX = ARCH.map((_, l) => 60 + (l / (ARCH.length - 1)) * (W - 120))
-    const neuronY = ARCH.map((n, l) => {
-      const spacing = Math.min(80, (H - 60) / (n + 1))
-      return Array.from({ length: n }, (_, j) => H / 2 + (j - (n - 1) / 2) * spacing)
-    })
-
-    // ── Draw connections ──────────────────────────────────────────────────────
-    for (let l = 0; l < ARCH.length - 1; l++) {
-      for (let j = 0; j < ARCH[l + 1]; j++) {
-        for (let i = 0; i < ARCH[l]; i++) {
-          const x1 = layerX[l], y1 = neuronY[l][i]
-          const x2 = layerX[l + 1], y2 = neuronY[l + 1][j]
-
-          const w = weights[l][j][i]
-          const dw = dWeights?.[l]?.[j]?.[i] ?? 0
-
-          // Color by weight sign
-          let alpha = clamp(Math.abs(w) * 0.6 + 0.1, 0.05, 0.8)
-          let color = w >= 0 ? `rgba(124,111,247,${alpha})` : `rgba(220,38,38,${alpha})`
-          let lineW = clamp(Math.abs(w) * 1.5, 0.5, 3)
-
-          // Highlight gradient flow during backprop
-          if (phase === 'backward' && dWeights) {
-            const adw = Math.abs(dw)
-            if (adw > 0.001) {
-              alpha = clamp(adw * 3, 0.3, 1)
-              color = dw > 0
-                ? `rgba(217,119,6,${alpha})`
-                : `rgba(5,150,105,${alpha})`
-              lineW = clamp(adw * 5, 1, 4)
-            }
-          }
-
-          // Animate active step
-          const isActive =
-            (phase === 'forward' && activeStep === l) ||
-            (phase === 'backward' && activeStep === (ARCH.length - 2 - l))
-
-          if (isActive) {
-            ctx.shadowBlur = 8
-            ctx.shadowColor = phase === 'forward' ? '#4ade80' : '#f59e0b'
-          } else {
-            ctx.shadowBlur = 0
-          }
-
-          ctx.beginPath()
-          ctx.moveTo(x1, y1)
-          ctx.lineTo(x2, y2)
-          ctx.strokeStyle = color
-          ctx.lineWidth = lineW
-          ctx.stroke()
-          ctx.shadowBlur = 0
-
-          // Weight label on hover (for highlighted connections)
-          if (highlightLayer === l && (highlightNeuron === i || highlightNeuron === j)) {
-            const mx = (x1 + x2) / 2
-            const my = (y1 + y2) / 2
-            ctx.fillStyle = '#d97706'
-            ctx.font = '9px Courier New'
-            ctx.fillText(w.toFixed(2), mx - 8, my - 4)
-          }
-        }
-      }
-    }
-
-    // ── Draw neurons ──────────────────────────────────────────────────────────
-    for (let l = 0; l < ARCH.length; l++) {
-      for (let j = 0; j < ARCH[l]; j++) {
-        const x = layerX[l]
-        const y = neuronY[l][j]
-        const activation = as?.[l]?.[j] ?? 0
-        const gradient = dAs?.[l]?.[j] ?? 0
-
-        const r = 18
-        const isHighlighted = highlightLayer === l && highlightNeuron === j
-
-        // Outer glow for active neurons
-        if (Math.abs(activation) > 0.3 || isHighlighted) {
-          ctx.beginPath()
-          ctx.arc(x, y, r + 5, 0, Math.PI * 2)
-          const glowAlpha = clamp(Math.abs(activation) * 0.3, 0, 0.4)
-          ctx.fillStyle = phase === 'backward' && Math.abs(gradient) > 0.01
-            ? `rgba(217,119,6,${glowAlpha})`
-            : `rgba(124,111,247,${glowAlpha})`
-          ctx.fill()
-        }
-
-        // Neuron fill based on activation value
-        const intensity = clamp(Math.abs(activation), 0, 1)
-        const isNeg = activation < 0
-        const fillAlpha = 0.15 + intensity * 0.5
-
-        ctx.beginPath()
-        ctx.arc(x, y, r, 0, Math.PI * 2)
-        if (phase === 'backward' && Math.abs(gradient) > 0.001) {
-          ctx.fillStyle = gradient > 0
-            ? `rgba(217,119,6,${fillAlpha + 0.2})`
-            : `rgba(5,150,105,${fillAlpha + 0.2})`
-        } else {
-          ctx.fillStyle = isNeg
-            ? `rgba(220,38,38,${fillAlpha})`
-            : `rgba(124,111,247,${fillAlpha})`
-        }
-        ctx.fill()
-
-        // Border
-        ctx.beginPath()
-        ctx.arc(x, y, r, 0, Math.PI * 2)
-        ctx.strokeStyle = isHighlighted ? '#1a1523' : (phase === 'backward' ? '#d97706' : '#7c6ff7')
-        ctx.lineWidth = isHighlighted ? 2.5 : 1
-        ctx.stroke()
-
-        // Activation value text
-        ctx.fillStyle = '#1a1523'
-        ctx.font = `bold 10px Courier New`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(
-          as ? activation.toFixed(2) : '?',
-          x, y
-        )
-
-        // Gradient overlay during backprop
-        if (phase === 'backward' && Math.abs(gradient) > 0.001) {
-          ctx.fillStyle = gradient > 0 ? '#f59e0b' : '#22d3ee'
-          ctx.font = '8px Courier New'
-          ctx.fillText(`∇${gradient.toFixed(2)}`, x, y + 26)
-        }
-      }
-    }
-
-    // ── Layer labels ──────────────────────────────────────────────────────────
-    const labels = ['INPUT', ...Array.from({ length: ARCH.length - 2 }, (_, i) => `HIDDEN ${i + 1}`), 'OUTPUT']
-    labels.forEach((label, l) => {
-      ctx.fillStyle = '#6b6580'
-      ctx.font = '9px Courier New'
-      ctx.textAlign = 'center'
-      ctx.fillText(label, layerX[l], H - 12)
-    })
-
-    // ── Phase indicator arrow ─────────────────────────────────────────────────
-    if (phase === 'forward' && activeStep >= 0) {
-      const fromX = layerX[activeStep] + 22
-      const toX   = layerX[activeStep + 1] - 22
-      const midY  = 20
-      ctx.beginPath()
-      ctx.moveTo(fromX, midY)
-      ctx.lineTo(toX - 8, midY)
-      ctx.strokeStyle = '#7c6ff7'
-      ctx.lineWidth = 1.5
-      ctx.setLineDash([4, 3])
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.beginPath()
-      ctx.moveTo(toX - 8, midY - 5)
-      ctx.lineTo(toX, midY)
-      ctx.lineTo(toX - 8, midY + 5)
-      ctx.fillStyle = '#7c6ff7'
-      ctx.fill()
-    }
-    if (phase === 'backward' && activeStep >= 0) {
-      const layerIdx = ARCH.length - 2 - activeStep
-      const fromX = layerX[layerIdx + 1] - 22
-      const toX   = layerX[layerIdx] + 22
-      const midY  = 20
-      ctx.beginPath()
-      ctx.moveTo(fromX, midY)
-      ctx.lineTo(toX + 8, midY)
-      ctx.strokeStyle = '#d97706'
-      ctx.lineWidth = 1.5
-      ctx.setLineDash([4, 3])
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.beginPath()
-      ctx.moveTo(toX + 8, midY - 5)
-      ctx.lineTo(toX, midY)
-      ctx.lineTo(toX + 8, midY + 5)
-      ctx.fillStyle = '#d97706'
-      ctx.fill()
-    }
-
-  }, [weights, as, dAs, dWeights, highlightLayer, highlightNeuron, phase, activeStep, activationKey])
-
+function PixelGrid({ pixels, highlight = false }) {
   return (
-    <canvas
-      ref={canvasRef}
-      width={640}
-      height={320}
-      style={{ width: '100%', height: 'auto', cursor: 'crosshair' }}
-    />
-  )
-}
-
-// ─── Loss Curve mini-chart ────────────────────────────────────────────────────
-function LossCurve({ history }) {
-  const canvasRef = useRef()
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas || !history.length) return
-    const ctx = canvas.getContext('2d')
-    const W = canvas.width, H = canvas.height
-    ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#f8f7ff'
-    ctx.fillRect(0, 0, W, H)
-
-    if (history.length < 2) return
-    const maxLoss = Math.max(...history, 0.1)
-    const pts = history.map((v, i) => ({
-      x: 8 + (i / (history.length - 1)) * (W - 16),
-      y: H - 8 - (v / maxLoss) * (H - 16),
-    }))
-
-    ctx.beginPath()
-    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
-    ctx.strokeStyle = '#7c6ff7'
-    ctx.lineWidth = 1.5
-    ctx.stroke()
-
-    // Fill under curve
-    ctx.beginPath()
-    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
-    ctx.lineTo(pts[pts.length - 1].x, H - 8)
-    ctx.lineTo(pts[0].x, H - 8)
-    ctx.fillStyle = 'rgba(124,111,247,0.07)'
-    ctx.fill()
-
-    // Current loss label
-    const last = history[history.length - 1]
-    ctx.fillStyle = '#7c6ff7'
-    ctx.font = '9px Courier New'
-    ctx.fillText(`loss: ${last.toFixed(4)}`, 8, 14)
-  }, [history])
-  return <canvas ref={canvasRef} width={260} height={80} style={{ width: '100%' }} />
-}
-
-// ─── Weight matrix display ────────────────────────────────────────────────────
-function WeightMatrix({ weights, dWeights, layerIdx, label }) {
-  const W = weights[layerIdx]
-  const dW = dWeights?.[layerIdx]
-
-  return (
-    <div>
-      <div style={{fontSize:10,color:"var(--text3)",marginBottom:4,letterSpacing:"0.5px"}}>{label}</div>
-      <div className="overflow-x-auto">
-        <table className="text-[11px] font-mono border-collapse">
-          <tbody>
-            {W.map((row, j) => (
-              <tr key={j}>
-                {row.map((w, i) => {
-                  const dw = dW?.[j]?.[i] ?? 0
-                  const isLarge = Math.abs(dw) > 0.05
-                  return (
-                    <td key={i} className={`px-1.5 py-0.5 border border-[var(--border)] text-center min-w-[52px] ${
-                      isLarge
-                        ? dw > 0 ? 'text-[#d97706] bg-[#fffbeb]' : 'text-[#059669] bg-[#eff6ff]'
-                        : 'text-[var(--text2)]'
-                    }`}>
-                      {w.toFixed(3)}
-                      {dW && (
-                        <div className={`text-[9px] ${dw > 0 ? 'text-[#d97706]' : 'text-[#059669]'}`}>
-                          {dw > 0 ? '↑' : '↓'}{Math.abs(dw).toFixed(3)}
-                        </div>
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2, width: 72 }}>
+      {pixels.map((v, i) => (
+        <div key={i} style={{
+          width: 22, height: 22, borderRadius: 3,
+          background: v === 1 ? (highlight ? '#7c6ff7' : '#1a1523') : '#e8e4f0',
+          border: '1px solid #c9c2e0',
+          transition: 'background 0.3s',
+        }} />
+      ))}
     </div>
   )
 }
 
-// ─── Activation function visualizer ──────────────────────────────────────────
-function ActivationViz({ activationKey }) {
-  const canvasRef = useRef()
+function NodeCircle({ value, size = 38, color = '#7c6ff7', label, glow = false, style = {} }) {
+  const alpha = Math.min(0.15 + Math.abs(value ?? 0) * 0.7, 0.95)
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: `rgba(${color === '#7c6ff7' ? '124,111,247' : color === '#d97706' ? '217,119,6' : '220,38,38'},${alpha})`,
+      border: `2px solid ${glow ? '#d97706' : color}`,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      boxShadow: glow ? `0 0 12px ${color}88` : 'none',
+      transition: 'all 0.4s',
+      ...style,
+    }}>
+      {value !== undefined && (
+        <span style={{ fontSize: 9, fontFamily: "'DM Mono',monospace", color: '#1a1523', fontWeight: 700, lineHeight: 1 }}>
+          {r3(value)}
+        </span>
+      )}
+      {label && <span style={{ fontSize: 7, color: '#6b6580', marginTop: 1 }}>{label}</span>}
+    </div>
+  )
+}
+
+function FormulaBox({ step }) {
+  const f = FORMULAS[Math.min(step, FORMULAS.length - 1)]
+  return (
+    <div style={{
+      background: '#1a1523', borderRadius: 10, padding: '12px 16px',
+      border: '1px solid #3a3050', minHeight: 80,
+    }}>
+      <div style={{ fontSize: 9, color: '#7c6ff7', letterSpacing: 2, marginBottom: 6 }}>FORMULA</div>
+      <div style={{ fontSize: 10, color: '#aaa3c0', fontWeight: 600, marginBottom: 4 }}>{f[0]}</div>
+      <pre style={{ fontSize: 11, color: '#e8e4f0', fontFamily: "'DM Mono',monospace", margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
+        {f[1]}
+      </pre>
+    </div>
+  )
+}
+
+function StepBadge({ label, icon, active, done }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'default',
+    }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: '50%',
+        background: active ? '#7c6ff7' : done ? '#22c55e22' : '#2a2040',
+        border: `2px solid ${active ? '#7c6ff7' : done ? '#22c55e' : '#3a3050'}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 14, color: active ? '#fff' : done ? '#22c55e' : '#6b6580',
+        boxShadow: active ? '0 0 16px #7c6ff755' : 'none',
+        transition: 'all 0.3s',
+      }}>
+        {done && !active ? '✓' : icon}
+      </div>
+      <span style={{ fontSize: 8, letterSpacing: 1, color: active ? '#7c6ff7' : done ? '#22c55e' : '#6b6580', fontWeight: active ? 700 : 400 }}>
+        {label}
+      </span>
+    </div>
+  )
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+export default function BackpropVisualizerPage() {
+  const [weights, setWeights] = useState(() => initWeights())
+  const [sampleIdx, setSampleIdx] = useState(0)
+  const [lr, setLr] = useState(LR_DEFAULT)
+  const [step, setStep] = useState(0)            // 0–5
+  const [fwd, setFwd] = useState(null)           // { z2, a2, z3, a3 }
+  const [grads, setGrads] = useState(null)       // { d3, d2, loss }
+  const [lossHistory, setLossHistory] = useState([])
+  const [epoch, setEpoch] = useState(0)
+  const [autoRunning, setAutoRunning] = useState(false)
+  const [hoveredWeight, setHoveredWeight] = useState(null) // { layer, j, i, value }
+  const autoRef = useRef(false)
+  const lossCanvasRef = useRef()
+
+  const sample = SAMPLES[sampleIdx]
+  const inputs = sample.pixels
+  const target = sample.target
+
+  // Recompute forward when sample or weights change
   useEffect(() => {
-    const canvas = canvasRef.current
+    const f = forward(inputs, weights.w1, weights.b1, weights.w2, weights.b2)
+    setFwd(f)
+    setGrads(null)
+    setStep(0)
+  }, [sampleIdx, weights])
+
+  // Draw loss curve
+  useEffect(() => {
+    const canvas = lossCanvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     const W = canvas.width, H = canvas.height
     ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#f8f7ff'
-    ctx.fillRect(0, 0, W, H)
-
-    const act = ACTIVATIONS[activationKey]
-    const range = 4
-    const toX = v => (v / range + 1) / 2 * W
-    const toY = v => (1 - (v + 1) / 2) * H
-
-    // Axes
-    ctx.strokeStyle = '#e8e4f0'
-    ctx.lineWidth = 1
-    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke()
-    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke()
-
-    // Function curve
+    ctx.fillStyle = '#1a1523'; ctx.fillRect(0, 0, W, H)
+    if (lossHistory.length < 2) return
+    const max = Math.max(...lossHistory, 0.01)
+    const pts = lossHistory.slice(-200).map((v, i, arr) => ({
+      x: 8 + (i / (arr.length - 1)) * (W - 16),
+      y: H - 8 - (v / max) * (H - 16),
+    }))
     ctx.beginPath()
-    for (let px = 0; px <= W; px++) {
-      const x = (px / W) * range * 2 - range
-      const y = act.fn(x)
-      const cy = (1 - (y + 1) / 2) * H
-      px === 0 ? ctx.moveTo(px, cy) : ctx.lineTo(px, cy)
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
+    ctx.strokeStyle = '#7c6ff7'; ctx.lineWidth = 1.5; ctx.stroke()
+    const last = lossHistory[lossHistory.length - 1]
+    ctx.fillStyle = '#7c6ff7'; ctx.font = '9px Courier New'
+    ctx.fillText(`loss: ${last.toFixed(5)}`, 8, 14)
+    ctx.fillStyle = '#6b6580'; ctx.fillText(`epoch: ${epoch}`, 8, 26)
+  }, [lossHistory, epoch])
+
+  function nextStep() {
+    if (step === 0) {
+      // Already have fwd from useEffect; move to step 1
+      setStep(1)
+    } else if (step === 1) {
+      setStep(2)
+    } else if (step === 2) {
+      setStep(3)
+    } else if (step === 3) {
+      const g = computeGrads(inputs, fwd.a2, fwd.a3, target, weights.w2)
+      setGrads(g)
+      setLossHistory(h => [...h.slice(-299), g.loss])
+      setStep(4)
+    } else if (step === 4) {
+      setStep(5)
+    } else if (step === 5) {
+      // Apply update
+      const g = grads || computeGrads(inputs, fwd.a2, fwd.a3, target, weights.w2)
+      const nw = updateWeights(weights, inputs, fwd.a2, g.d2, g.d3, lr)
+      setWeights(nw)
+      setEpoch(e => e + 1)
+      setStep(0)
     }
-    ctx.strokeStyle = '#7c6ff7'
-    ctx.lineWidth = 2
-    ctx.stroke()
-
-    // Derivative curve
-    ctx.beginPath()
-    for (let px = 0; px <= W; px++) {
-      const x = (px / W) * range * 2 - range
-      const dy = act.deriv(x)
-      const cy = (1 - (dy + 1) / 2) * H
-      px === 0 ? ctx.moveTo(px, cy) : ctx.lineTo(px, cy)
-    }
-    ctx.strokeStyle = 'rgba(217,119,6,0.6)'
-    ctx.lineWidth = 1.5
-    ctx.setLineDash([3, 3])
-    ctx.stroke()
-    ctx.setLineDash([])
-
-    ctx.fillStyle = '#6b6580'
-    ctx.font = '8px Courier New'
-    ctx.fillText('f(x)', 4, 12)
-    ctx.fillStyle = '#a89fc0'
-    ctx.fillText("f'(x)", 4, 22)
-  }, [activationKey])
-  return <canvas ref={canvasRef} width={160} height={80} style={{ width: '100%' }} />
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-const SAMPLE_DATA = [
-  { inputs: [0.8, 0.2], target: 0.9, label: 'Pattern A' },
-  { inputs: [0.1, 0.9], target: 0.1, label: 'Pattern B' },
-  { inputs: [0.6, 0.6], target: 0.7, label: 'Pattern C' },
-  { inputs: [0.3, 0.7], target: 0.3, label: 'Pattern D' },
-]
-
-const PHASE_STEPS = {
-  idle:     { label: 'IDLE',        color: "var(--text3)" },
-  forward:  { label: 'FORWARD →',   color: "var(--accent)" },
-  loss:     { label: 'LOSS ✕',       color: "#dc2626" },
-  backward: { label: '← BACKWARD',  color: "#d97706" },
-  update:   { label: 'UPDATE ↺',    color: "#059669" },
-}
-
-export default function BackpropVisualizerPage() {
-  const [net, setNet] = useState(() => initNetwork())
-  const [activationKey, setActivationKey] = useState('sigmoid')
-  const [lr, setLr] = useState(0.5)
-  const [sampleIdx, setSampleIdx] = useState(0)
-  const [phase, setPhase] = useState('idle')
-  const [activeStep, setActiveStep] = useState(-1)
-  const [fwdResult, setFwdResult] = useState(null)   // { as, zs }
-  const [bwdResult, setBwdResult] = useState(null)   // { loss, dWeights, dBiases, dAs }
-  const [lossHistory, setLossHistory] = useState([])
-  const [epoch, setEpoch] = useState(0)
-  const [prevWeights, setPrevWeights] = useState(null)
-  const [highlightLayer, setHighlightLayer] = useState(null)
-  const [highlightNeuron, setHighlightNeuron] = useState(null)
-  const [autoRunning, setAutoRunning] = useState(false)
-  const [log, setLog] = useState([])
-  const autoRef = useRef(false)
-
-  const sample = SAMPLE_DATA[sampleIdx]
-
-  // ── Step: Forward ──────────────────────────────────────────────────────────
-  async function stepForward() {
-    setPhase('forward')
-    setBwdResult(null)
-    const fwd = forwardPass(sample.inputs, net.weights, net.biases, activationKey)
-    // Animate layer by layer
-    for (let l = 0; l < ARCH.length - 1; l++) {
-      setActiveStep(l)
-      await sleep(420)
-    }
-    setFwdResult(fwd)
-    setActiveStep(-1)
-    setPhase('loss')
-    addLog(`▶ Forward: pred=${fwd.as[fwd.as.length - 1][0].toFixed(4)}, target=${sample.target}`)
   }
 
-  // ── Step: Backward ─────────────────────────────────────────────────────────
-  async function stepBackward() {
-    if (!fwdResult) return
-    setPhase('backward')
-    const bwd = backwardPass(fwdResult.as, fwdResult.zs, net.weights, sample.target, activationKey)
-    for (let l = 0; l < ARCH.length - 1; l++) {
-      setActiveStep(l)
-      await sleep(420)
+  function trainOneEpoch() {
+    let w = { ...weights }
+    let totalLoss = 0
+    for (const s of SAMPLES) {
+      const f = forward(s.pixels, w.w1, w.b1, w.w2, w.b2)
+      const g = computeGrads(s.pixels, f.a2, f.a3, s.target, w.w2)
+      w = updateWeights(w, s.pixels, f.a2, g.d2, g.d3, lr)
+      totalLoss += g.loss
     }
-    setBwdResult(bwd)
-    setActiveStep(-1)
-    setLossHistory(h => [...h.slice(-79), bwd.loss])
-    addLog(`◀ Backward: loss=${bwd.loss.toFixed(4)}, maxGrad=${maxGrad(bwd.dWeights).toFixed(4)}`)
-  }
-
-  // ── Step: Update weights ───────────────────────────────────────────────────
-  function stepUpdate() {
-    if (!bwdResult) return
-    setPrevWeights(JSON.parse(JSON.stringify(net.weights)))
-    setNet(prev => {
-      const newW = prev.weights.map((layer, l) =>
-        layer.map((row, j) =>
-          row.map((w, i) => round4(w - lr * bwdResult.dWeights[l][j][i]))
-        )
-      )
-      const newB = prev.biases.map((layer, l) =>
-        layer.map((b, j) => round4(b - lr * bwdResult.dBiases[l][j]))
-      )
-      return { weights: newW, biases: newB }
-    })
+    setWeights(w)
     setEpoch(e => e + 1)
-    setFwdResult(null)
-    setBwdResult(null)
-    setPhase('idle')
-    addLog(`↺ Update: lr=${lr}, epoch=${epoch + 1}`)
+    setLossHistory(h => [...h.slice(-299), r4(totalLoss / SAMPLES.length)])
+    setStep(0)
   }
 
-  // ── Auto run (train) ───────────────────────────────────────────────────────
-  async function runOneEpoch(currentNet) {
-    const fwd = forwardPass(sample.inputs, currentNet.weights, currentNet.biases, activationKey)
-    const bwd = backwardPass(fwd.as, fwd.zs, currentNet.weights, sample.target, activationKey)
-    const newWeights = currentNet.weights.map((layer, l) =>
-      layer.map((row, j) =>
-        row.map((w, i) => round4(w - lr * bwd.dWeights[l][j][i]))
-      )
-    )
-    const newBiases = currentNet.biases.map((layer, l) =>
-      layer.map((b, j) => round4(b - lr * bwd.dBiases[l][j]))
-    )
-    return { weights: newWeights, biases: newBiases, loss: bwd.loss }
-  }
-
-  async function startAutoTrain() {
-    if (autoRunning) { autoRef.current = false; setAutoRunning(false); return }
+  async function trainN(n) {
     autoRef.current = true
     setAutoRunning(true)
-    setPhase('forward')
-
-    let currentNet = { ...net, weights: JSON.parse(JSON.stringify(net.weights)), biases: JSON.parse(JSON.stringify(net.biases)) }
-    let ep = epoch
-
-    while (autoRef.current) {
-      const result = await runOneEpoch(currentNet)
-      currentNet = { weights: result.weights, biases: result.biases }
-      ep++
-      setNet({ ...currentNet })
-      setEpoch(ep)
-      setLossHistory(h => [...h.slice(-79), result.loss])
-      setFwdResult(forwardPass(sample.inputs, currentNet.weights, currentNet.biases, activationKey))
-      if (result.loss < 0.0001 || ep > 2000) break
-      await sleep(80)
+    let w = { ...weights }
+    for (let ep = 0; ep < n; ep++) {
+      if (!autoRef.current) break
+      let totalLoss = 0
+      for (const s of SAMPLES) {
+        const f = forward(s.pixels, w.w1, w.b1, w.w2, w.b2)
+        const g = computeGrads(s.pixels, f.a2, f.a3, s.target, w.w2)
+        w = updateWeights(w, s.pixels, f.a2, g.d2, g.d3, lr)
+        totalLoss += g.loss
+      }
+      if (ep % 10 === 0) {
+        setWeights({ ...w })
+        setEpoch(e => e + n > e ? e + 10 : e)
+        setLossHistory(h => [...h.slice(-299), r4(totalLoss / SAMPLES.length)])
+        await new Promise(r => setTimeout(r, 1))
+      }
     }
+    setWeights({ ...w })
+    setEpoch(e => e + n)
     autoRef.current = false
     setAutoRunning(false)
-    setPhase('idle')
-    addLog(`⬛ Auto-train stopped: epoch=${ep}, loss=${lossHistory[lossHistory.length - 1]?.toFixed(5) ?? '?'}`)
   }
 
   function resetAll() {
     autoRef.current = false
     setAutoRunning(false)
-    setNet(initNetwork())
-    setFwdResult(null)
-    setBwdResult(null)
-    setPhase('idle')
-    setActiveStep(-1)
-    setLossHistory([])
-    setEpoch(0)
-    setPrevWeights(null)
-    setLog([])
+    setWeights(initWeights())
+    setFwd(null); setGrads(null); setStep(0)
+    setLossHistory([]); setEpoch(0)
   }
 
-  function addLog(msg) {
-    setLog(l => [`[ep${epoch}] ${msg}`, ...l.slice(0, 19)])
-  }
+  // Prediction
+  const out = fwd?.a3 ?? [0.5, 0.5]
+  const pred = out[0] > out[1] ? 0 : 1
+  const isCorrect = pred === parseInt(sample.label)
+  const totalLoss = grads?.loss ?? (fwd ? r4(0.5 * fwd.a3.reduce((s, o, k) => s + (target[k] - o) ** 2, 0)) : null)
 
-  const phaseInfo = PHASE_STEPS[phase] || PHASE_STEPS.idle
-  const pred = fwdResult ? fwdResult.as[fwdResult.as.length - 1][0] : null
-  const currentLoss = bwdResult?.loss ?? null
+  // Colors
+  const c = { accent: '#7c6ff7', orange: '#d97706', red: '#dc2626', green: '#22c55e', bg: '#0e0c16', bg2: '#1a1523', bg3: '#22193a', border: '#2a2040', text: '#e8e4f0', text2: '#aaa3c0', text3: '#6b6580' }
+
+  // Weight color helper
+  const wColor = (v) => v > 0
+    ? `rgba(100,120,255,${Math.min(0.2 + Math.abs(v) * 0.5, 0.9)})`
+    : `rgba(220,60,60,${Math.min(0.2 + Math.abs(v) * 0.5, 0.9)})`
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-start justify-between mb-5">
-        <div>
-          <h2 style={{fontSize:22,fontWeight:700,color:'var(--text)',marginBottom:4}}>🧠 Backpropagation Visualizer</h2>
-          <p style={{fontSize:13,color:'var(--text2)',maxWidth:540}}>
-            역전파 알고리즘의 동작을 단계별로 직접 체험합니다. 순전파 → 오차 계산 → 역전파 → 가중치 업데이트의 전 과정을 눈으로 확인하세요.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 ml-4">
-          <span className="text-[10px] tracking-[1px] text-[var(--text3)]">PHASE</span>
-          <span className="text-[13px] font-bold tracking-[2px]" style={{ color: phaseInfo.color }}>
-            {phaseInfo.label}
+    <div style={{ background: c.bg, minHeight: '100vh', color: c.text, fontFamily: "'DM Mono', monospace", padding: '20px 16px' }}>
+
+      {/* ── Header ── */}
+      <div style={{ marginBottom: 20, borderBottom: `1px solid ${c.border}`, paddingBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 800, color: c.text, margin: 0, letterSpacing: -0.5 }}>
+            🧠 Backpropagation Visualizer
+          </h2>
+          <span style={{ fontSize: 10, color: c.accent, letterSpacing: 2, fontWeight: 600 }}>
+            EXCEL LECTURE 07 · 12→3→2
           </span>
         </div>
+        <p style={{ fontSize: 11, color: c.text2, margin: 0, lineHeight: 1.6 }}>
+          Excel 예제의 역전파 계산 과정을 웹에서 단계별로 재현합니다. 4×3 픽셀 입력 → 은닉층 3개 → 출력층 2개 → 숫자 0 또는 1 예측
+        </p>
       </div>
 
-      <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 260px' }}>
-
-        {/* ── LEFT COLUMN ── */}
-        <div className="space-y-4">
-
-          {/* Network canvas */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] tracking-[2px] text-[var(--text3)]">NEURAL NETWORK  2→3→2→1</span>
-              <div className="flex items-center gap-3 text-[10px] text-[var(--text3)]">
-                <span><span className="text-[#7c6ff7]">━</span> positive weight</span>
-                <span><span className="text-[#dc2626]">━</span> negative weight</span>
-                <span><span className="text-[#d97706]">━</span> gradient flow</span>
-              </div>
-            </div>
-            <NetworkCanvas
-              weights={net.weights}
-              as={fwdResult?.as}
-              dAs={bwdResult?.dAs}
-              dWeights={bwdResult?.dWeights}
-              highlightLayer={highlightLayer}
-              highlightNeuron={highlightNeuron}
-              phase={phase}
-              activeStep={activeStep}
-              activationKey={activationKey}
-            />
-          </div>
-
-          {/* Step buttons */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-3">STEP-BY-STEP CONTROL</div>
-
-            <div className="grid grid-cols-5 gap-2 mb-3">
-              {/* 1 Forward */}
-              <button
-                onClick={stepForward}
-                disabled={phase === 'forward' || autoRunning}
-                className="flex flex-col items-center gap-1 bg-[#ecfdf5] border border-[#86efac] text-[#7c6ff7] py-2.5 px-2 hover:bg-[#d1fae5] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <span className="text-[18px]">▶</span>
-                <span className="text-[9px] tracking-[1px]">FORWARD</span>
-              </button>
-
-              {/* Arrow */}
-              <div className="flex items-center justify-center text-[var(--text3)] text-[20px]">→</div>
-
-              {/* 2 Backward */}
-              <button
-                onClick={stepBackward}
-                disabled={!fwdResult || phase === 'backward' || autoRunning}
-                className="flex flex-col items-center gap-1 bg-[#fffbeb] border border-[#fcd34d] text-[#d97706] py-2.5 px-2 hover:bg-[#fef3c7] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <span className="text-[18px]">◀</span>
-                <span className="text-[9px] tracking-[1px]">BACKWARD</span>
-              </button>
-
-              {/* Arrow */}
-              <div className="flex items-center justify-center text-[var(--text3)] text-[20px]">→</div>
-
-              {/* 3 Update */}
-              <button
-                onClick={stepUpdate}
-                disabled={!bwdResult || autoRunning}
-                className="flex flex-col items-center gap-1 bg-[#eff6ff] border border-[#93c5fd] text-[#059669] py-2.5 px-2 hover:bg-[#dbeafe] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              >
-                <span className="text-[18px]">↺</span>
-                <span className="text-[9px] tracking-[1px]">UPDATE W</span>
-              </button>
-            </div>
-
-            {/* Phase explanation */}
-            <div className="grid grid-cols-3 gap-2 text-[10px]">
-              <div className={`p-2 border ${phase === 'forward' || phase === 'loss' ? 'border-[#7c6ff7] bg-[#f5f3ff]' : 'border-[var(--border)]'}`}>
-                <div className="text-[#7c6ff7] font-bold mb-1">① FORWARD</div>
-                <div className="text-[var(--text2)] leading-relaxed">입력값이 레이어를 통과하며 예측값을 생성합니다. 각 뉴런은 weighted sum + activation을 계산합니다.</div>
-              </div>
-              <div className={`p-2 border ${phase === 'backward' ? 'border-[#fcd34d] bg-[#fffbeb]' : 'border-[var(--border)]'}`}>
-                <div style={{color:"#d97706",fontWeight:600,marginBottom:4}}>② BACKWARD</div>
-                <div className="text-[var(--text2)] leading-relaxed">오차가 뒤에서 앞으로 전파됩니다. chain rule로 각 weight가 loss에 얼마나 기여했는지 계산합니다.</div>
-              </div>
-              <div className={`p-2 border ${phase === 'update' ? 'border-[#93c5fd] bg-[#eff6ff]' : 'border-[var(--border)]'}`}>
-                <div className="text-[#059669] font-bold mb-1">③ UPDATE</div>
-                <div className="text-[var(--text2)] leading-relaxed">gradient 방향 반대로 weight를 수정합니다. learning rate가 수정 폭을 결정합니다.</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Weight matrices */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-3">
-              WEIGHT MATRICES
-              {bwdResult && <span className="text-[#d97706] ml-2">← gradient 크기에 따라 색상 변화</span>}
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              {net.weights.map((_, l) => (
-                <WeightMatrix
-                  key={l}
-                  weights={net.weights}
-                  dWeights={bwdResult?.dWeights}
-                  layerIdx={l}
-                  label={`W${l + 1}  (${ARCH[l + 1]}×${ARCH[l]})`}
-                />
-              ))}
-            </div>
-            {prevWeights && (
-              <div className="mt-2 text-[10px] text-[#059669] border-l-2 border-[#059669] pl-2">
-                ↺ weight updated — 위 행렬 값이 gradient × lr만큼 수정되었습니다
-              </div>
+      {/* ── Step progress bar ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 16, background: c.bg2, borderRadius: 12, padding: '10px 16px', border: `1px solid ${c.border}` }}>
+        {STEP_LABELS.map((s, i) => (
+          <React.Fragment key={s.id}>
+            <StepBadge label={s.title} icon={s.icon} active={step === i} done={step > i} />
+            {i < STEP_LABELS.length - 1 && (
+              <div style={{ flex: 1, height: 2, background: step > i ? c.accent : c.border, margin: '0 4px', borderRadius: 2, transition: 'background 0.4s', marginBottom: 12 }} />
             )}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* ── Main layout: Network | Controls ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 14 }}>
+
+        {/* ── LEFT: Network visualization ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* Step description */}
+          <div style={{ background: c.bg3, borderRadius: 10, padding: '10px 14px', border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.accent}` }}>
+            <div style={{ fontSize: 9, color: c.accent, letterSpacing: 2, marginBottom: 4 }}>
+              STEP {step + 1} · {STEP_LABELS[step]?.title}
+            </div>
+            <p style={{ fontSize: 11, color: c.text2, margin: 0, lineHeight: 1.7 }}>
+              {STEP_DESCRIPTIONS[step]}
+            </p>
           </div>
 
-        </div>
+          {/* Network visualization area */}
+          <div style={{ background: c.bg2, borderRadius: 14, border: `1px solid ${c.border}`, padding: 16, display: 'flex', gap: 20, alignItems: 'center', minHeight: 340 }}>
 
-        {/* ── RIGHT COLUMN ── */}
-        <div className="space-y-3">
-
-          {/* Sample & config */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-3">INPUT / CONFIG</div>
-
-            {/* Sample selector */}
-            <div className="text-[11px] text-[var(--text2)] mb-1">TRAINING SAMPLE</div>
-            <select
-              value={sampleIdx}
-              onChange={e => { setSampleIdx(Number(e.target.value)); setFwdResult(null); setBwdResult(null); setPhase('idle') }}
-              className="w-full bg-white text-[var(--text)] border border-[var(--border)] px-2 py-1.5 text-[11px] font-mono mb-3 focus:outline-none focus:border-[#4ade80]"
-            >
-              {SAMPLE_DATA.map((s, i) => (
-                <option key={i} value={i}>{s.label}: [{s.inputs.join(', ')}] → {s.target}</option>
-              ))}
-            </select>
-
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              <div className="bg-white border border-[var(--border)] p-2 text-center">
-                <div className="text-[9px] text-[var(--text3)] mb-1">INPUT</div>
-                <div className="text-[13px] font-bold text-[var(--text)]">[{sample.inputs.join(', ')}]</div>
+            {/* INPUT LAYER — pixel grid + 12 nodes */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>INPUT</div>
+              <PixelGrid pixels={inputs} highlight={step >= 1} />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 3, marginTop: 4 }}>
+                {inputs.map((v, i) => (
+                  <div key={i} style={{
+                    width: 28, height: 18, borderRadius: 4,
+                    background: v === 1 ? (step >= 1 ? '#7c6ff722' : '#22193a') : '#0e0c16',
+                    border: `1px solid ${v === 1 ? c.accent : c.border}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 9, color: v === 1 ? c.accent : c.text3,
+                    fontWeight: 700, transition: 'all 0.4s',
+                  }}>{v}</div>
+                ))}
               </div>
-              <div className="bg-white border border-[var(--border)] p-2 text-center">
-                <div className="text-[9px] text-[var(--text3)] mb-1">TARGET</div>
-                <div className="text-[18px] font-bold text-[#7c6ff7]">{sample.target}</div>
-              </div>
+              <div style={{ fontSize: 8, color: c.text3 }}>12 pixels</div>
             </div>
 
-            {/* Prediction result */}
-            {pred !== null && (
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <div className="bg-white border border-[var(--border)] p-2 text-center">
-                  <div className="text-[9px] text-[var(--text3)] mb-1">PRED</div>
-                  <div className={`text-[18px] font-bold ${Math.abs(pred - sample.target) < 0.05 ? 'text-[#7c6ff7]' : 'text-[#dc2626]'}`}>
-                    {pred.toFixed(4)}
+            {/* Arrow input → hidden */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+              <div style={{ fontSize: 9, color: step >= 1 ? c.accent : c.border }}>
+                {step >= 1 ? '━━▶' : '───'}
+              </div>
+              {step >= 1 && (
+                <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', maxWidth: 50 }}>
+                  w₁<br/>×x
+                </div>
+              )}
+            </div>
+
+            {/* HIDDEN LAYER — 3 nodes */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>HIDDEN</div>
+              {[0, 1, 2].map(i => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                  <NodeCircle
+                    value={fwd ? fwd.a2[i] : undefined}
+                    size={48}
+                    color={step === 4 ? '#d97706' : '#7c6ff7'}
+                    glow={step === 1 || step === 4}
+                    label={`h${i+1}`}
+                  />
+                  {step >= 1 && fwd && (
+                    <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', lineHeight: 1.4 }}>
+                      <div>z={r3(fwd.z2[i])}</div>
+                      {step === 4 && grads && (
+                        <div style={{ color: c.orange }}>δ={r3(grads.d2[i])}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 8, color: c.text3 }}>3 nodes</div>
+            </div>
+
+            {/* Arrow hidden → output */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+              <div style={{ fontSize: 9, color: step >= 2 ? c.accent : c.border }}>
+                {step >= 2 ? '━━▶' : '───'}
+              </div>
+              {step >= 2 && (
+                <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', maxWidth: 50 }}>
+                  w₂<br/>×a₂
+                </div>
+              )}
+            </div>
+
+            {/* OUTPUT LAYER — 2 nodes */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>OUTPUT</div>
+              {[0, 1].map(k => (
+                <div key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                  <NodeCircle
+                    value={fwd ? fwd.a3[k] : undefined}
+                    size={52}
+                    color={step === 3 || step === 4 ? (k === target.indexOf(Math.max(...target)) ? '#22c55e' : '#dc2626') : '#7c6ff7'}
+                    glow={step === 2 || step === 3}
+                    label={`out${k}`}
+                  />
+                  <div style={{ fontSize: 8, textAlign: 'center', lineHeight: 1.5 }}>
+                    {step >= 2 && fwd && <div style={{ color: c.text3 }}>z={r3(fwd.z3[k])}</div>}
+                    <div style={{ color: target[k] === 1 ? c.green : c.text3, fontWeight: 700 }}>
+                      t={target[k]}
+                    </div>
+                    {step >= 3 && grads && (
+                      <div style={{ color: c.orange }}>δ={r3(grads.d3[k])}</div>
+                    )}
                   </div>
                 </div>
-                <div className="bg-white border border-[var(--border)] p-2 text-center">
-                  <div className="text-[9px] text-[var(--text3)] mb-1">LOSS</div>
-                  <div className={`text-[18px] font-bold ${currentLoss !== null ? (currentLoss < 0.01 ? 'text-[#7c6ff7]' : 'text-[#dc2626]') : 'text-[var(--text2)]'}`}>
-                    {currentLoss !== null ? currentLoss.toFixed(5) : '—'}
+              ))}
+              <div style={{ fontSize: 8, color: c.text3 }}>2 nodes</div>
+            </div>
+
+            {/* PREDICTION RESULT */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>RESULT</div>
+              <div style={{
+                width: 60, height: 60, borderRadius: '50%',
+                background: step >= 2 ? (isCorrect ? '#22c55e22' : '#dc262622') : '#1a1523',
+                border: `3px solid ${step >= 2 ? (isCorrect ? c.green : c.red) : c.border}`,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.4s',
+                boxShadow: step >= 2 ? `0 0 20px ${isCorrect ? c.green : c.red}44` : 'none',
+              }}>
+                <span style={{ fontSize: 22, fontWeight: 800, color: step >= 2 ? (isCorrect ? c.green : c.red) : c.text3 }}>
+                  {step >= 2 ? pred : '?'}
+                </span>
+                <span style={{ fontSize: 8, color: step >= 2 ? (isCorrect ? c.green : c.red) : c.text3 }}>
+                  {step >= 2 ? (isCorrect ? '✓ OK' : '✗ ERR') : ''}
+                </span>
+              </div>
+              {step >= 3 && totalLoss !== null && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 8, color: c.text3 }}>LOSS</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: totalLoss > 0.1 ? c.red : c.green }}>
+                    {totalLoss.toFixed(5)}
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Activation */}
-            <div className="text-[11px] text-[var(--text2)] mb-1">ACTIVATION FUNCTION</div>
-            <div className="flex gap-1 mb-2">
-              {Object.entries(ACTIVATIONS).map(([key, { label }]) => (
-                <button
-                  key={key}
-                  onClick={() => setActivationKey(key)}
-                  className={`flex-1 py-1 text-[10px] tracking-[1px] border transition-colors ${
-                    activationKey === key
-                      ? 'bg-[#ecfdf5] border-[#86efac] text-[#7c6ff7]'
-                      : 'bg-transparent border-[var(--border)] text-[var(--text2)] hover:border-[#333]'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <ActivationViz activationKey={activationKey} />
-            <div className="flex gap-3 text-[9px] text-[var(--text3)] mt-1">
-              <span><span className="text-[#7c6ff7]">—</span> f(x)</span>
-              <span><span className="text-[#d97706]">- -</span> f'(x) derivative</span>
+              )}
             </div>
           </div>
 
-          {/* Learning rate */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-2">LEARNING RATE</div>
-            <div className="text-[28px] font-bold text-[#d97706] mb-1">{lr.toFixed(2)}</div>
-            <input
-              type="range" min="0.01" max="2.0" step="0.01" value={lr}
-              onChange={e => setLr(Number(e.target.value))}
-              className="w-full mb-1"
-            />
-            <div className="flex justify-between text-[9px] text-[var(--text3)] mb-2">
-              <span>0.01 (느림)</span><span>1.0</span><span>2.0 (발산)</span>
+          {/* ── Weight matrices ── */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+
+            {/* W1 matrix (3×12, shown compactly) */}
+            <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
+              <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>
+                W₁ HIDDEN WEIGHTS (3×12)
+                {step === 5 && <span style={{ color: c.orange, marginLeft: 8 }}>← updating</span>}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', fontSize: 9, fontFamily: "'DM Mono',monospace" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: '2px 4px', color: c.text3, textAlign: 'left' }}>h</th>
+                      {Array.from({ length: 12 }, (_, j) => (
+                        <th key={j} style={{ padding: '2px 3px', color: c.text3, fontSize: 8 }}>x{j+1}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weights.w1.map((row, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: '2px 4px', color: c.accent, fontWeight: 700 }}>h{i+1}</td>
+                        {row.map((w, j) => {
+                          const dw = grads && step === 5 ? r4(lr * grads.d2[i] * inputs[j]) : null
+                          return (
+                            <td key={j}
+                              onMouseEnter={() => setHoveredWeight({ layer: 1, i, j, value: w, dw })}
+                              onMouseLeave={() => setHoveredWeight(null)}
+                              style={{
+                                padding: '2px 3px', textAlign: 'center', cursor: 'default',
+                                background: hoveredWeight?.layer === 1 && hoveredWeight.i === i && hoveredWeight.j === j ? '#3a3050' : wColor(w),
+                                color: c.text, fontSize: 8, borderRadius: 2,
+                                outline: step === 5 && dw ? `1px solid ${c.orange}` : 'none',
+                                transition: 'background 0.2s',
+                              }}>
+                              {w.toFixed(2)}
+                              {step === 5 && dw !== null && (
+                                <div style={{ fontSize: 7, color: c.orange }}>{dw > 0 ? '+' : ''}{dw.toFixed(3)}</div>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div className={`text-[10px] border-l-2 pl-2 ${
-              lr > 1.5 ? 'text-[#dc2626] border-[#f87171]' :
-              lr > 0.8 ? 'text-[#d97706] border-[#f59e0b]' :
-              lr < 0.05 ? 'text-[#059669] border-[#22d3ee]' :
-              'text-[var(--text2)] border-[#333]'
-            }`}>
-              {lr > 1.5 ? '⚠ 너무 크면 loss가 발산할 수 있습니다' :
-               lr > 0.8 ? '주의: 불안정할 수 있습니다' :
-               lr < 0.05 ? '매우 느리게 수렴합니다' :
-               '적절한 학습률입니다'}
+
+            {/* W2 matrix (2×3) */}
+            <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
+              <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>
+                W₂ OUTPUT WEIGHTS (2×3)
+                {step === 5 && <span style={{ color: c.orange, marginLeft: 8 }}>← updating</span>}
+              </div>
+              <table style={{ borderCollapse: 'collapse', fontSize: 10, fontFamily: "'DM Mono',monospace" }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '3px 6px', color: c.text3 }}>out</th>
+                    {['h1','h2','h3'].map(h => (
+                      <th key={h} style={{ padding: '3px 8px', color: c.text3 }}>{h}</th>
+                    ))}
+                    <th style={{ padding: '3px 6px', color: c.text3 }}>bias</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {weights.w2.map((row, k) => {
+                    return (
+                      <tr key={k}>
+                        <td style={{ padding: '3px 6px', color: c.accent, fontWeight: 700 }}>out{k}</td>
+                        {row.map((w, i) => {
+                          const dw = grads && step === 5 ? r4(lr * grads.d3[k] * fwd.a2[i]) : null
+                          return (
+                            <td key={i}
+                              onMouseEnter={() => setHoveredWeight({ layer: 2, k, i, value: w, dw })}
+                              onMouseLeave={() => setHoveredWeight(null)}
+                              style={{
+                                padding: '3px 8px', textAlign: 'center', cursor: 'default',
+                                background: hoveredWeight?.layer === 2 && hoveredWeight.k === k && hoveredWeight.i === i ? '#3a3050' : wColor(w),
+                                color: c.text, fontSize: 10, borderRadius: 3,
+                                outline: step === 5 && dw ? `1px solid ${c.orange}` : 'none',
+                                transition: 'background 0.2s',
+                              }}>
+                              {w.toFixed(3)}
+                              {step === 5 && dw !== null && (
+                                <div style={{ fontSize: 8, color: c.orange }}>{dw > 0 ? '+' : ''}{dw.toFixed(4)}</div>
+                              )}
+                            </td>
+                          )
+                        })}
+                        <td style={{ padding: '3px 8px', color: c.text2, fontSize: 10 }}>
+                          {weights.b2[k].toFixed(3)}
+                          {step === 5 && grads && (
+                            <div style={{ fontSize: 8, color: c.orange }}>
+                              {(r4(lr * grads.d3[k]) > 0 ? '+' : '')}{r4(lr * grads.d3[k]).toFixed(4)}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+
+              {/* Hover tooltip */}
+              {hoveredWeight && (
+                <div style={{ marginTop: 8, background: '#3a3050', borderRadius: 6, padding: '6px 10px', fontSize: 10, color: c.text2 }}>
+                  w = {hoveredWeight.value.toFixed(4)}
+                  {hoveredWeight.dw !== null && <span style={{ color: c.orange }}> → Δ={hoveredWeight.dw.toFixed(4)}</span>}
+                </div>
+              )}
+
+              {/* Delta display in backprop step */}
+              {step >= 3 && grads && (
+                <div style={{ marginTop: 10, borderTop: `1px solid ${c.border}`, paddingTop: 8 }}>
+                  <div style={{ fontSize: 9, color: c.orange, letterSpacing: 1, marginBottom: 4 }}>GRADIENTS</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {grads.d3.map((d, k) => (
+                      <div key={k} style={{ background: '#d9770611', borderRadius: 4, padding: '4px 8px', fontSize: 10 }}>
+                        <span style={{ color: c.text3 }}>δ₃[{k}] =</span>
+                        <span style={{ color: c.orange, fontWeight: 700 }}> {d.toFixed(4)}</span>
+                      </div>
+                    ))}
+                    {grads.d2.map((d, i) => (
+                      <div key={i} style={{ background: '#7c6ff711', borderRadius: 4, padding: '4px 8px', fontSize: 10 }}>
+                        <span style={{ color: c.text3 }}>δ₂[{i}] =</span>
+                        <span style={{ color: c.accent, fontWeight: 700 }}> {d.toFixed(4)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Loss curve */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="flex justify-between items-center mb-2">
-              <div className="text-[10px] tracking-[2px] text-[var(--text3)]">LOSS CURVE</div>
-              <div className="text-[10px] text-[var(--text2)]">epoch {epoch}</div>
-            </div>
-            <LossCurve history={lossHistory} />
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>LOSS CURVE</div>
+            <canvas ref={lossCanvasRef} width={640} height={70} style={{ width: '100%', borderRadius: 6 }} />
             {lossHistory.length === 0 && (
-              <div className="text-[10px] text-[var(--text3)] text-center mt-1">학습 시작 후 표시됩니다</div>
+              <div style={{ fontSize: 10, color: c.text3, textAlign: 'center', marginTop: 4 }}>
+                학습을 시작하면 Loss 그래프가 표시됩니다
+              </div>
             )}
+          </div>
+        </div>
+
+        {/* ── RIGHT: Controls ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* Sample selector */}
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>TRAINING SAMPLE</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 10 }}>
+              {SAMPLES.map((s, i) => (
+                <button key={i} onClick={() => { setSampleIdx(i); setStep(0) }}
+                  style={{
+                    border: `2px solid ${sampleIdx === i ? c.accent : c.border}`,
+                    background: sampleIdx === i ? '#7c6ff722' : c.bg3,
+                    borderRadius: 8, padding: '6px 4px', cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                    transition: 'all 0.2s',
+                  }}>
+                  <PixelGrid pixels={s.pixels} highlight={sampleIdx === i} />
+                  <span style={{ fontSize: 9, color: sampleIdx === i ? c.accent : c.text3, fontWeight: 700 }}>
+                    "{s.label}"
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ background: c.bg3, borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 8, color: c.text3, marginBottom: 2 }}>TARGET</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.accent }}>
+                  [{target.join(', ')}]
+                </div>
+                <div style={{ fontSize: 9, color: c.text3 }}>숫자 "{sample.label}"</div>
+              </div>
+              <div style={{ background: c.bg3, borderRadius: 8, padding: '8px 10px', textAlign: 'center', border: `1px solid ${isCorrect ? c.green : c.red}` }}>
+                <div style={{ fontSize: 8, color: c.text3, marginBottom: 2 }}>PREDICTION</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: isCorrect ? c.green : c.red }}>
+                  [{out.map(v => r3(v)).join(', ')}]
+                </div>
+                <div style={{ fontSize: 9, color: isCorrect ? c.green : c.red }}>
+                  {isCorrect ? '✓ Correct' : '✗ Wrong'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Step-by-step control */}
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>STEP CONTROL</div>
+            <button onClick={nextStep} disabled={autoRunning}
+              style={{
+                width: '100%', padding: '12px', borderRadius: 8, cursor: autoRunning ? 'not-allowed' : 'pointer',
+                background: '#7c6ff7', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700,
+                letterSpacing: 1, marginBottom: 8, opacity: autoRunning ? 0.5 : 1,
+                boxShadow: '0 2px 12px #7c6ff744', transition: 'all 0.2s',
+              }}>
+              {step === 5 ? '↺ APPLY & NEXT SAMPLE' : `▶ NEXT STEP → ${STEP_LABELS[step + 1]?.title ?? ''}`}
+            </button>
+            <div style={{ fontSize: 9, color: c.text3, background: c.bg3, borderRadius: 6, padding: '6px 10px', lineHeight: 1.7 }}>
+              현재: <span style={{ color: c.accent }}>{STEP_LABELS[step]?.title}</span>
+              {step < 5 && <> → 다음: <span style={{ color: c.text }}>{STEP_LABELS[step + 1]?.title}</span></>}
+            </div>
           </div>
 
           {/* Auto train */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-2">AUTO TRAINING</div>
-            <button
-              onClick={startAutoTrain}
-              className={`w-full py-2.5 font-bold text-[12px] tracking-[2px] transition-colors mb-2 border ${
-                autoRunning
-                  ? 'bg-[#fee2e2] border-[#fca5a5] text-[#dc2626] hover:bg-[#fecaca]'
-                  : 'bg-[#ecfdf5] border-[#86efac] text-[#7c6ff7] hover:bg-[#d1fae5]'
-              }`}
-            >
-              {autoRunning ? '⬛ STOP' : '⚡ AUTO TRAIN'}
-            </button>
-            <button
-              onClick={resetAll}
-              className="w-full py-2 bg-transparent border border-[var(--border)] text-[var(--text2)] text-[11px] tracking-[1px] hover:border-[#333] hover:text-[#777] transition-colors"
-            >
-              ↺ RESET NETWORK
-            </button>
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>AUTO TRAIN</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <button onClick={trainOneEpoch} disabled={autoRunning}
+                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.accent}`, color: c.accent, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+                ⚡ Train 1 Epoch (10 samples)
+              </button>
+              <button onClick={() => trainN(100)} disabled={autoRunning}
+                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.green}`, color: c.green, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+                🚀 Train 100 Epochs
+              </button>
+              <button onClick={() => trainN(1000)} disabled={autoRunning}
+                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.orange}`, color: c.orange, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+                ⚡ Train 1000 Epochs
+              </button>
+              {autoRunning && (
+                <button onClick={() => { autoRef.current = false; setAutoRunning(false) }}
+                  style={{ padding: '9px', borderRadius: 7, cursor: 'pointer', background: '#dc262622', border: `1px solid ${c.red}`, color: c.red, fontSize: 11, fontWeight: 600 }}>
+                  ⬛ STOP
+                </button>
+              )}
+              <button onClick={resetAll}
+                style={{ padding: '8px', borderRadius: 7, cursor: 'pointer', background: 'transparent', border: `1px solid ${c.border}`, color: c.text2, fontSize: 10 }}>
+                ↺ Reset Weights
+              </button>
+            </div>
+            {autoRunning && (
+              <div style={{ marginTop: 8, fontSize: 10, color: c.orange, textAlign: 'center' }}>
+                학습 중... epoch {epoch}
+              </div>
+            )}
           </div>
 
-          {/* Console log */}
-          <div style={{background:"var(--bg2)",borderRadius:14,border:"1px solid var(--border)",padding:14}}>
-            <div className="text-[10px] tracking-[2px] text-[var(--text3)] mb-2">CONSOLE</div>
-            <div className="h-[100px] overflow-y-auto font-mono">
-              {log.length === 0
-                ? <div className="text-[10px] text-[var(--text3)]">_ waiting for input</div>
-                : log.map((l, i) => (
-                  <div key={i} className="text-[10px] text-[var(--text2)] leading-relaxed">{l}</div>
-                ))
-              }
+          {/* Learning rate */}
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 6 }}>LEARNING RATE η</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: c.orange, marginBottom: 6 }}>{lr.toFixed(2)}</div>
+            <input type="range" min="0.01" max="1.0" step="0.01" value={lr}
+              onChange={e => setLr(Number(e.target.value))}
+              style={{ width: '100%', marginBottom: 6 }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: c.text3, marginBottom: 6 }}>
+              <span>0.01</span><span>0.2 (Excel)</span><span>1.0</span>
+            </div>
+            <div style={{
+              fontSize: 10, padding: '5px 8px', borderRadius: 5,
+              background: lr > 0.5 ? '#dc262611' : lr < 0.05 ? '#22c55e11' : '#7c6ff711',
+              color: lr > 0.5 ? c.red : lr < 0.05 ? c.green : c.text2,
+              borderLeft: `2px solid ${lr > 0.5 ? c.red : lr < 0.05 ? c.green : c.accent}`,
+            }}>
+              {lr > 0.5 ? '⚠ 크면 발산할 수 있습니다' : lr < 0.05 ? '매우 느리게 수렴합니다' : `Excel 예제 기본값: 0.2`}
             </div>
           </div>
 
+          {/* Formula box */}
+          <FormulaBox step={Math.min(
+            step === 0 ? 0 : step === 1 ? 1 : step === 2 ? 2 : step === 2 ? 3 : step === 3 ? 4 : step === 4 ? 5 : 7,
+            FORMULAS.length - 1
+          )} />
+
+          {/* Stats */}
+          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
+            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>STATISTICS</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <div style={{ background: c.bg3, borderRadius: 6, padding: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: 8, color: c.text3 }}>EPOCH</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: c.accent }}>{epoch}</div>
+              </div>
+              <div style={{ background: c.bg3, borderRadius: 6, padding: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: 8, color: c.text3 }}>LOSS</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: totalLoss !== null && totalLoss < 0.05 ? c.green : c.red }}>
+                  {lossHistory.length > 0 ? lossHistory[lossHistory.length - 1].toFixed(4) : '—'}
+                </div>
+              </div>
+            </div>
+
+            {/* Accuracy check across all samples */}
+            {epoch > 0 && (() => {
+              const correct = SAMPLES.filter(s => {
+                const f = forward(s.pixels, weights.w1, weights.b1, weights.w2, weights.b2)
+                const p = f.a3[0] > f.a3[1] ? 0 : 1
+                return p === parseInt(s.label)
+              }).length
+              return (
+                <div style={{ marginTop: 8, background: correct === SAMPLES.length ? '#22c55e11' : '#dc262611', borderRadius: 6, padding: '6px 10px', fontSize: 10, textAlign: 'center', color: correct === SAMPLES.length ? c.green : c.text2 }}>
+                  정확도: {correct}/{SAMPLES.length} 샘플 정답
+                  {correct === SAMPLES.length && <span style={{ color: c.green }}> 🎉 완벽!</span>}
+                </div>
+              )
+            })()}
+          </div>
         </div>
       </div>
 
-      {/* Bottom: explanation panels */}
-      <div className="grid grid-cols-3 gap-3 mt-4">
-        <ConceptCard title="왜 역전파가 필요한가?" color="var(--accent)">
-          <p>가중치를 <em>랜덤</em>으로 수정하면 평균 수백만 번의 시도가 필요합니다.</p>
-          <p>역전파는 각 weight가 loss에 <strong>얼마나, 어느 방향으로</strong> 기여했는지를 수학적으로 계산하므로, 단 한 번의 계산으로 모든 weight의 수정 방향을 알 수 있습니다.</p>
-        </ConceptCard>
-        <ConceptCard title="Chain Rule이란?" color="#d97706">
-          <p>역전파는 <em>연쇄 법칙(chain rule)</em>을 사용합니다.</p>
-          <p>∂L/∂w = ∂L/∂a · ∂a/∂z · ∂z/∂w</p>
-          <p>출력층의 gradient가 hidden layer로 곱해지며 전파됩니다. 이 과정에서 activation 함수의 미분값이 핵심입니다.</p>
-        </ConceptCard>
-        <ConceptCard title="Gradient의 의미" color="#059669">
-          <p><strong>양수 gradient</strong>: 이 weight를 키우면 loss도 커짐 → weight를 줄여야 함</p>
-          <p><strong>음수 gradient</strong>: 이 weight를 키우면 loss가 줄어듦 → weight를 키워야 함</p>
-          <p>그래서 <em>w = w - lr × gradient</em> 방향으로 업데이트합니다.</p>
-        </ConceptCard>
+      {/* ── Bottom: concept cards ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 14 }}>
+        {[
+          { title: '왜 역전파가 필요한가?', color: c.accent, body: 'weight를 무작위로 수정하면 수백만 번의 시도가 필요합니다. 역전파는 각 weight가 loss에 얼마나 기여했는지를 chain rule로 정확히 계산합니다.' },
+          { title: 'sigmoid의 역할', color: c.orange, body: 'σ(z) = 1/(1+e⁻ᶻ) — 임의의 실수를 0~1 범위로 압축합니다. 미분이 σ(1-σ)로 간단해서 역전파 계산이 쉬워집니다.' },
+          { title: 'weight 업데이트 원칙', color: c.green, body: 'w_new = w_old + η · δ · a_prev\ngradient 반대 방향으로 weight를 수정합니다. learning rate η가 수정 폭을 결정합니다.' },
+        ].map(({ title, color, body }) => (
+          <div key={title} style={{ background: c.bg2, borderRadius: 10, padding: '12px 14px', border: `1px solid ${c.border}` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color, marginBottom: 6 }}>{title}</div>
+            <pre style={{ fontSize: 10, color: c.text2, lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap', fontFamily: "'DM Mono',monospace" }}>{body}</pre>
+          </div>
+        ))}
       </div>
     </div>
   )
-}
-
-function ConceptCard({ title, color, children }) {
-  return (
-    <div className="bg-white border border-[var(--border)] p-4">
-      <div className="text-[12px] font-bold mb-2" style={{ color }}>{title}</div>
-      <div className="text-[11px] text-[var(--text2)] leading-relaxed space-y-1">
-        {children}
-      </div>
-    </div>
-  )
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
-
-function maxGrad(dWeights) {
-  let max = 0
-  dWeights.forEach(layer => layer.forEach(row => row.forEach(v => { if (Math.abs(v) > max) max = Math.abs(v) })))
-  return max
 }
