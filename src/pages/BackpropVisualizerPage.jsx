@@ -284,7 +284,6 @@ export default function BackpropVisualizerPage() {
   })()
 
   return (
-    /* Flex row: LEFT=main content  RIGHT=sidebar */
     <div style={{display:'flex', gap:14, alignItems:'flex-start'}}>
 
       {/* ══ LEFT: main content ══ */}
@@ -605,13 +604,12 @@ export default function BackpropVisualizerPage() {
 
       {/* ══ RIGHT: sidebar ══ */}
       <div style={{
-        width: 340,
+        width: 268,
         flexShrink: 0,
         position: 'sticky',
         top: 80,
         maxHeight: 'calc(100vh - 100px)',
         overflowY: 'auto',
-        overflowX: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         gap: 14,
@@ -620,16 +618,16 @@ export default function BackpropVisualizerPage() {
         {/* Sample selector */}
         <Card style={{padding:16}}>
           <Lbl>TRAINING SAMPLE</Lbl>
-          <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:6, marginBottom:12}}>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:5, marginBottom:12}}>
             {SAMPLES.map((s,i)=>(
               <button key={i} onClick={()=>{setSi(i);setStep(0)}} style={{
                 border:`2px solid ${si===i?C.accent:C.border}`,
                 background:si===i?C.tagBg:C.bg, borderRadius:10,
-                padding:'5px 3px', cursor:'pointer', minWidth:0,
+                padding:'5px 3px', cursor:'pointer',
                 display:'flex', flexDirection:'column', alignItems:'center', gap:3,
                 transition:'all .2s',
               }}>
-                <PixelGrid pixels={s.pixels} px={12} lit={si===i}/>
+                <PixelGrid pixels={s.pixels} px={13} lit={si===i}/>
                 <span style={{fontSize:9, color:si===i?C.accent:C.text3, fontWeight:700}}>"{s.label}"</span>
               </button>
             ))}
@@ -740,6 +738,6 @@ export default function BackpropVisualizerPage() {
 
       </div>{/* end RIGHT sidebar */}
 
-    </div>/* end flex row */
+    </div>{/* end flex row */}
   )
 }
