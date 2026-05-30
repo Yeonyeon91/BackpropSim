@@ -283,15 +283,148 @@ export default function BackpropVisualizerPage() {
     return `${n}/${SAMPLES.length}`
   })()
 
-  return (
-    /* Flex row: LEFT=main content  RIGHT=sidebar */
-    <div style={{display:'flex', gap:14, alignItems:'flex-start'}}>
+  // ── Layout: full-width left column + fixed right sidebar ────────────────────
+  // Use a wrapper div with padding-right to carve out space for the sidebar.
+  // Sidebar is position:absolute on the right so it never pushes content.
+  const SIDE = 268  // sidebar width px
+  const GAP  = 14
 
-      {/* ══ LEFT: main content ══ */}
-      <div style={{flex:'1 1 0', minWidth:0, display:'flex', flexDirection:'column', gap:14}}>
+  return (
+    <div style={{position:'relative'}}>
+
+      {/* ── Sidebar (right, sticky) ── */}
+      <div style={{
+        position:'absolute', top:0, right:0,
+        width:SIDE,
+        display:'flex', flexDirection:'column', gap:14,
+      }}>
+        {/* Sample selector */}
+        <Card style={{padding:16}}>
+          <Lbl>TRAINING SAMPLE</Lbl>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:5, marginBottom:12}}>
+            {SAMPLES.map((s,i)=>(
+              <button key={i} onClick={()=>{setSi(i);setStep(0)}} style={{
+                border:`2px solid ${si===i?C.accent:C.border}`,
+                background:si===i?C.tagBg:C.bg, borderRadius:10,
+                padding:'5px 3px', cursor:'pointer',
+                display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+                transition:'all .2s',
+              }}>
+                <PixelGrid pixels={s.pixels} px={13} lit={si===i}/>
+                <span style={{fontSize:9, color:si===i?C.accent:C.text3, fontWeight:700}}>"{s.label}"</span>
+              </button>
+            ))}
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+            <div style={{background:C.bg3, borderRadius:10, padding:'10px', textAlign:'center'}}>
+              <div style={{fontSize:9, color:C.text3, marginBottom:3, letterSpacing:1}}>TARGET</div>
+              <div style={{fontSize:13, fontWeight:700, color:C.accent, fontFamily:"'DM Mono',monospace"}}>[{tgt.join(', ')}]</div>
+              <div style={{fontSize:10, color:C.text3, marginTop:2}}>숫자 "{smp.label}"</div>
+            </div>
+            <div style={{
+              background:step>=2?(correct?'#ecfdf5':'#fff1f2'):C.bg3, borderRadius:10, padding:'10px', textAlign:'center',
+              border:`1.5px solid ${step>=2?(correct?'#86efac':'#fca5a5'):C.border}`, transition:'all .3s',
+            }}>
+              <div style={{fontSize:9, color:C.text3, marginBottom:3, letterSpacing:1}}>PREDICTION</div>
+              <div style={{fontSize:13, fontWeight:700, fontFamily:"'DM Mono',monospace", color:step>=2?(correct?C.green:C.danger):C.text3}}>
+                {step>=2?`[${out.map(v=>r3(v)).join(', ')}]`:'[—, —]'}
+              </div>
+              <div style={{fontSize:10, fontWeight:600, marginTop:2, color:step>=2?(correct?C.green:C.danger):C.text3}}>
+                {step>=2?(correct?'✓ Correct':'✗ Wrong'):''}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Step control */}
+        <Card style={{padding:16}}>
+          <Lbl>STEP-BY-STEP</Lbl>
+          <Btn onClick={next} disabled={auto} variant='primary' style={{marginBottom:8,fontSize:13}}>
+            {step===5?'↺ Apply & Next Sample':`▶ Next → ${STEP_META[Math.min(step+1,5)].label}`}
+          </Btn>
+          <div style={{fontSize:10, color:C.text3, textAlign:'center', padding:'4px 8px', background:C.bg3, borderRadius:6}}>
+            현재 <span style={{color:C.accent,fontWeight:600}}>{STEP_META[step].label}</span>
+            {step<5&&<> → 다음 <span style={{color:C.text,fontWeight:500}}>{STEP_META[step+1].label}</span></>}
+          </div>
+        </Card>
+
+        {/* Auto train */}
+        <Card style={{padding:16}}>
+          <Lbl>AUTO TRAIN</Lbl>
+          <div style={{display:'flex', flexDirection:'column', gap:6}}>
+            <Btn onClick={train1} disabled={auto} variant='green'>⚡ Train 1 Epoch</Btn>
+            <Btn onClick={()=>trainN(100)}  disabled={auto} variant='outline'>🚀 Train 100 Epochs</Btn>
+            <Btn onClick={()=>trainN(1000)} disabled={auto} variant='orange'>⚡ Train 1000 Epochs</Btn>
+            {auto
+              ? <Btn onClick={()=>{autoRef.current=false;setAuto(false)}} variant='danger'>⬛ Stop</Btn>
+              : <Btn onClick={reset} variant='ghost'>↺ Reset Weights</Btn>
+            }
+          </div>
+          {auto && <div style={{marginTop:8,fontSize:11,color:C.orange,textAlign:'center'}}>학습 중… epoch {ep}</div>}
+        </Card>
+
+        {/* Learning rate */}
+        <Card style={{padding:16}}>
+          <Lbl>LEARNING RATE η</Lbl>
+          <div style={{fontSize:26,fontWeight:800,color:C.orange,marginBottom:6,fontFamily:"'DM Mono',monospace"}}>{lr.toFixed(2)}</div>
+          <input type='range' min='.01' max='1' step='.01' value={lr} onChange={e=>setLr(+e.target.value)} style={{width:'100%',marginBottom:6}}/>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.text3,marginBottom:8}}>
+            <span>0.01</span><span style={{color:C.accent}}>0.2 (Excel)</span><span>1.0</span>
+          </div>
+          <div style={{
+            fontSize:10,padding:'6px 10px',borderRadius:8,
+            background:lr>.5?'#fff1f2':lr<.05?'#ecfdf5':C.tagBg,
+            color:lr>.5?C.danger:lr<.05?C.green:C.accent,
+            borderLeft:`2px solid ${lr>.5?C.danger:lr<.05?C.green:C.accent}`,
+          }}>
+            {lr>.5?'⚠ 크면 발산할 수 있습니다':lr<.05?'매우 느리게 수렴합니다':'Excel 예제 권장값 (η = 0.2)'}
+          </div>
+        </Card>
+
+        {/* Formula */}
+        <Card style={{padding:16}}>
+          <Lbl>FORMULA · {formula.label}</Lbl>
+          <div style={{background:C.bg3,borderRadius:10,padding:'12px 14px'}}>
+            <pre style={{fontSize:11,color:C.accent,fontFamily:"'DM Mono',monospace",margin:0,whiteSpace:'pre-wrap',lineHeight:1.9,fontWeight:600}}>
+              {formula.expr}
+            </pre>
+          </div>
+        </Card>
+
+        {/* Stats */}
+        <Card style={{padding:16}}>
+          <Lbl>STATISTICS</Lbl>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+            <div style={{background:C.bg3,borderRadius:8,padding:'8px',textAlign:'center'}}>
+              <div style={{fontSize:9,color:C.text3,marginBottom:2}}>EPOCH</div>
+              <div style={{fontSize:20,fontWeight:800,color:C.accent,fontFamily:"'DM Mono',monospace"}}>{ep}</div>
+            </div>
+            <div style={{background:C.bg3,borderRadius:8,padding:'8px',textAlign:'center'}}>
+              <div style={{fontSize:9,color:C.text3,marginBottom:2}}>LOSS</div>
+              <div style={{fontSize:16,fontWeight:800,fontFamily:"'DM Mono',monospace",
+                color:hist.length>0&&hist[hist.length-1]<.05?C.green:C.danger}}>
+                {hist.length>0?hist[hist.length-1].toFixed(4):'—'}
+              </div>
+            </div>
+          </div>
+          {acc&&(
+            <div style={{
+              padding:'8px 10px',borderRadius:8,textAlign:'center',fontSize:11,fontWeight:600,
+              background:acc==='10/10'?'#ecfdf5':C.bg3,
+              color:acc==='10/10'?C.green:C.text2,
+              border:`1.5px solid ${acc==='10/10'?'#86efac':C.border}`,
+            }}>
+              정확도: {acc} 샘플 정답 {acc==='10/10'&&'🎉'}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Main content (padded right to avoid sidebar) ── */}
+      <div style={{paddingRight: SIDE + GAP}}>
 
         {/* Header */}
-        <div>
+        <div style={{marginBottom:20}}>
           <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6,flexWrap:'wrap'}}>
             <h2 style={{fontSize:22,fontWeight:700,color:C.text,margin:0,letterSpacing:'-.3px'}}>
               🧠 Backprop Visualizer
@@ -306,13 +439,13 @@ export default function BackpropVisualizerPage() {
         </div>
 
         {/* Step progress */}
-        <Card style={{padding:'10px 16px'}}>
+        <Card style={{padding:'10px 16px',marginBottom:14}}>
           <StepBar step={step}/>
         </Card>
 
         {/* Step description */}
         <div style={{
-          background:C.tagBg,borderRadius:12,padding:'10px 16px',
+          background:C.tagBg,borderRadius:12,padding:'10px 16px',marginBottom:18,
           borderLeft:`3px solid ${C.accent}`,display:'flex',gap:10,alignItems:'flex-start',
         }}>
           <span style={{fontSize:17,lineHeight:1.4,flexShrink:0}}>{STEP_META[step].icon}</span>
@@ -325,8 +458,9 @@ export default function BackpropVisualizerPage() {
         </div>
 
         {/* Network diagram */}
-        <Card style={{padding:20}}>
+        <Card style={{padding:20,marginBottom:14}}>
           <Lbl>NEURAL NETWORK  12 → 3 → 2</Lbl>
+          {/* inner scroll for very narrow screens */}
           <div style={{overflowX:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:12,minWidth:480}}>
 
@@ -456,7 +590,7 @@ export default function BackpropVisualizerPage() {
         </Card>
 
         {/* Weight tables */}
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
 
           {/* W1 */}
           <Card style={{padding:16}}>
@@ -581,7 +715,7 @@ export default function BackpropVisualizerPage() {
         </div>
 
         {/* Loss curve */}
-        <Card style={{padding:16}}>
+        <Card style={{padding:16,marginBottom:14}}>
           <Lbl>LOSS CURVE</Lbl>
           <LossCurve history={hist} epoch={ep}/>
           {hist.length===0&&<div style={{fontSize:11,color:C.text3,textAlign:'center',marginTop:6}}>학습을 시작하면 Loss 그래프가 표시됩니다</div>}
@@ -601,144 +735,7 @@ export default function BackpropVisualizerPage() {
           ))}
         </div>
 
-      </div>{/* end LEFT */}
-
-      {/* ══ RIGHT: sidebar ══ */}
-      <div style={{
-        width: 268,
-        flexShrink: 0,
-        position: 'sticky',
-        top: 80,
-        maxHeight: 'calc(100vh - 100px)',
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 14,
-      }}>
-
-        {/* Sample selector */}
-        <Card style={{padding:16}}>
-          <Lbl>TRAINING SAMPLE</Lbl>
-          <div style={{display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:5, marginBottom:12}}>
-            {SAMPLES.map((s,i)=>(
-              <button key={i} onClick={()=>{setSi(i);setStep(0)}} style={{
-                border:`2px solid ${si===i?C.accent:C.border}`,
-                background:si===i?C.tagBg:C.bg, borderRadius:10,
-                padding:'5px 3px', cursor:'pointer',
-                display:'flex', flexDirection:'column', alignItems:'center', gap:3,
-                transition:'all .2s',
-              }}>
-                <PixelGrid pixels={s.pixels} px={13} lit={si===i}/>
-                <span style={{fontSize:9, color:si===i?C.accent:C.text3, fontWeight:700}}>"{s.label}"</span>
-              </button>
-            ))}
-          </div>
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-            <div style={{background:C.bg3, borderRadius:10, padding:'10px', textAlign:'center'}}>
-              <div style={{fontSize:9, color:C.text3, marginBottom:3, letterSpacing:1}}>TARGET</div>
-              <div style={{fontSize:13, fontWeight:700, color:C.accent, fontFamily:"'DM Mono',monospace"}}>[{tgt.join(', ')}]</div>
-              <div style={{fontSize:10, color:C.text3, marginTop:2}}>숫자 "{smp.label}"</div>
-            </div>
-            <div style={{
-              background:step>=2?(correct?'#ecfdf5':'#fff1f2'):C.bg3, borderRadius:10, padding:'10px', textAlign:'center',
-              border:`1.5px solid ${step>=2?(correct?'#86efac':'#fca5a5'):C.border}`, transition:'all .3s',
-            }}>
-              <div style={{fontSize:9, color:C.text3, marginBottom:3, letterSpacing:1}}>PREDICTION</div>
-              <div style={{fontSize:13, fontWeight:700, fontFamily:"'DM Mono',monospace", color:step>=2?(correct?C.green:C.danger):C.text3}}>
-                {step>=2?`[${out.map(v=>r3(v)).join(', ')}]`:'[—, —]'}
-              </div>
-              <div style={{fontSize:10, fontWeight:600, marginTop:2, color:step>=2?(correct?C.green:C.danger):C.text3}}>
-                {step>=2?(correct?'✓ Correct':'✗ Wrong'):''}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Step control */}
-        <Card style={{padding:16}}>
-          <Lbl>STEP-BY-STEP</Lbl>
-          <Btn onClick={next} disabled={auto} variant='primary' style={{marginBottom:8,fontSize:13}}>
-            {step===5?'↺ Apply & Next Sample':`▶ Next → ${STEP_META[Math.min(step+1,5)].label}`}
-          </Btn>
-          <div style={{fontSize:10, color:C.text3, textAlign:'center', padding:'4px 8px', background:C.bg3, borderRadius:6}}>
-            현재 <span style={{color:C.accent,fontWeight:600}}>{STEP_META[step].label}</span>
-            {step<5&&<> → 다음 <span style={{color:C.text,fontWeight:500}}>{STEP_META[step+1].label}</span></>}
-          </div>
-        </Card>
-
-        {/* Auto train */}
-        <Card style={{padding:16}}>
-          <Lbl>AUTO TRAIN</Lbl>
-          <div style={{display:'flex', flexDirection:'column', gap:6}}>
-            <Btn onClick={train1} disabled={auto} variant='green'>⚡ Train 1 Epoch</Btn>
-            <Btn onClick={()=>trainN(100)}  disabled={auto} variant='outline'>🚀 Train 100 Epochs</Btn>
-            <Btn onClick={()=>trainN(1000)} disabled={auto} variant='orange'>⚡ Train 1000 Epochs</Btn>
-            {auto
-              ? <Btn onClick={()=>{autoRef.current=false;setAuto(false)}} variant='danger'>⬛ Stop</Btn>
-              : <Btn onClick={reset} variant='ghost'>↺ Reset Weights</Btn>
-            }
-          </div>
-          {auto && <div style={{marginTop:8,fontSize:11,color:C.orange,textAlign:'center'}}>학습 중… epoch {ep}</div>}
-        </Card>
-
-        {/* Learning rate */}
-        <Card style={{padding:16}}>
-          <Lbl>LEARNING RATE η</Lbl>
-          <div style={{fontSize:26,fontWeight:800,color:C.orange,marginBottom:6,fontFamily:"'DM Mono',monospace"}}>{lr.toFixed(2)}</div>
-          <input type='range' min='.01' max='1' step='.01' value={lr} onChange={e=>setLr(+e.target.value)} style={{width:'100%',marginBottom:6}}/>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:C.text3,marginBottom:8}}>
-            <span>0.01</span><span style={{color:C.accent}}>0.2 (Excel)</span><span>1.0</span>
-          </div>
-          <div style={{
-            fontSize:10,padding:'6px 10px',borderRadius:8,
-            background:lr>.5?'#fff1f2':lr<.05?'#ecfdf5':C.tagBg,
-            color:lr>.5?C.danger:lr<.05?C.green:C.accent,
-            borderLeft:`2px solid ${lr>.5?C.danger:lr<.05?C.green:C.accent}`,
-          }}>
-            {lr>.5?'⚠ 크면 발산할 수 있습니다':lr<.05?'매우 느리게 수렴합니다':'Excel 예제 권장값 (η = 0.2)'}
-          </div>
-        </Card>
-
-        {/* Formula */}
-        <Card style={{padding:16}}>
-          <Lbl>FORMULA · {formula.label}</Lbl>
-          <div style={{background:C.bg3,borderRadius:10,padding:'12px 14px'}}>
-            <pre style={{fontSize:11,color:C.accent,fontFamily:"'DM Mono',monospace",margin:0,whiteSpace:'pre-wrap',lineHeight:1.9,fontWeight:600}}>
-              {formula.expr}
-            </pre>
-          </div>
-        </Card>
-
-        {/* Stats */}
-        <Card style={{padding:16}}>
-          <Lbl>STATISTICS</Lbl>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-            <div style={{background:C.bg3,borderRadius:8,padding:'8px',textAlign:'center'}}>
-              <div style={{fontSize:9,color:C.text3,marginBottom:2}}>EPOCH</div>
-              <div style={{fontSize:20,fontWeight:800,color:C.accent,fontFamily:"'DM Mono',monospace"}}>{ep}</div>
-            </div>
-            <div style={{background:C.bg3,borderRadius:8,padding:'8px',textAlign:'center'}}>
-              <div style={{fontSize:9,color:C.text3,marginBottom:2}}>LOSS</div>
-              <div style={{fontSize:16,fontWeight:800,fontFamily:"'DM Mono',monospace",
-                color:hist.length>0&&hist[hist.length-1]<.05?C.green:C.danger}}>
-                {hist.length>0?hist[hist.length-1].toFixed(4):'—'}
-              </div>
-            </div>
-          </div>
-          {acc&&(
-            <div style={{
-              padding:'8px 10px',borderRadius:8,textAlign:'center',fontSize:11,fontWeight:600,
-              background:acc==='10/10'?'#ecfdf5':C.bg3,
-              color:acc==='10/10'?C.green:C.text2,
-              border:`1.5px solid ${acc==='10/10'?'#86efac':C.border}`,
-            }}>
-              정확도: {acc} 샘플 정답 {acc==='10/10'&&'🎉'}
-            </div>
-          )}
-        </Card>
-
-      </div>{/* end RIGHT sidebar */}
-
-    </div>/* end flex row */
+      </div>{/* end main content */}
+    </div>
   )
 }
