@@ -12,72 +12,16 @@ const C = {
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 const SAMPLES = [
-  // ── 숫자 0 (32개) ──
   { pixels:[1,1,1,1,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
   { pixels:[0,1,1,1,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
   { pixels:[1,1,0,1,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
   { pixels:[1,1,1,1,0,1,1,0,1,1,1,0], target:[1,0], label:'0' },
   { pixels:[1,1,1,1,0,1,1,0,1,0,1,1], target:[1,0], label:'0' },
-  { pixels:[0,0,0,1,1,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,0,0,0,1,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,0,0,1,1,0,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,0,0,1,1,1,1,0,1,1,1,0], target:[1,0], label:'0' },
-  { pixels:[0,0,0,1,1,1,1,0,1,0,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,1,1,1,0,0,0], target:[1,0], label:'0' },
-  { pixels:[0,1,1,1,0,1,1,1,1,0,0,0], target:[1,0], label:'0' },
-  { pixels:[1,1,0,1,0,1,1,1,1,0,0,0], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,1,1,0,0,0,0], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,0,1,1,0,0,0], target:[1,0], label:'0' },
-  { pixels:[1,0,1,1,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,0,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,1,0,0,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,1,0,1,1,0,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,1,0,1,0,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,1,0,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,0,1,1,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,1,1,1,0,0,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,1,1,1,0,1,1,0,0,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,1,1,1,0,1,1,0,1,1,0,1], target:[1,0], label:'0' },
-  { pixels:[0,1,1,1,0,1,0,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[0,1,1,0,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,0,1,0,0,1,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,0,1,0,1,1,0,0,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,0,1,0,1,1,0,1,1,0,1], target:[1,0], label:'0' },
-  { pixels:[1,1,0,1,0,1,0,0,1,1,1,1], target:[1,0], label:'0' },
-  { pixels:[1,1,0,0,0,1,1,0,1,1,1,1], target:[1,0], label:'0' },
-  // ── 숫자 1 (32개) ──
-  { pixels:[0,1,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,0,1,1], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,0,0,1,1], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,0,1,1,1], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,1,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,1,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,1,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,1,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,1,0,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,1,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,1,1,1], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,1,0,1,1,0,1,1], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,1,0,1,1,0,1,1,0,1,1], target:[0,1], label:'1' },
-  { pixels:[1,1,0,1,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,1,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,1,1,0,1,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[1,1,0,0,1,0,0,0,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,1,0,0], target:[0,1], label:'1' },
-  { pixels:[1,0,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[1,0,0,0,1,0,0,1,0,0,0,1], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,0,0,0,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,0,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,0,0,0,1,0,0,1,0,1,1,0], target:[0,1], label:'1' },
-  { pixels:[0,0,0,0,1,0,0,1,0,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,1,0,0,1,0,0,0,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,0,0,1,0,0,1,0,1,0], target:[0,1], label:'1' },
-  { pixels:[0,1,0,1,0,0,1,0,0,0,1,0], target:[0,1], label:'1' },
+  { pixels:[0,0,0,0,1,1,0,1,1,0,1,1], target:[0,1], label:'1' },
+  { pixels:[0,1,1,1,1,1,0,1,1,0,1,1], target:[0,1], label:'1' },
+  { pixels:[0,0,0,1,1,0,1,1,0,1,1,0], target:[0,1], label:'1' },
+  { pixels:[0,0,0,1,1,1,1,1,1,1,1,0], target:[0,1], label:'1' },
+  { pixels:[0,0,0,1,1,1,1,1,1,0,1,1], target:[0,1], label:'1' },
 ]
 
 const STEP_META = [
@@ -290,7 +234,6 @@ export default function BackpropVisualizerPage() {
   const [ep,   setEp]   = useState(0)
   const [auto, setAuto] = useState(false)
   const [hov,  setHov]  = useState(null)
-  const [sampleTab, setSampleTab] = useState('전체')
   const autoRef = useRef(false)
 
   const smp = SAMPLES[si]
@@ -675,41 +618,20 @@ export default function BackpropVisualizerPage() {
 
         {/* Sample selector */}
         <Card style={{padding:16}}>
-          <Lbl>TRAINING SAMPLE <span style={{fontWeight:400,color:C.text3}}>(총 64개 · Excel Data 시트)</span></Lbl>
-          {/* 0/1 탭 */}
-          <div style={{display:'flex', gap:6, marginBottom:8}}>
-            {['전체','0','1'].map(tab => {
-              const active = (sampleTab||'전체') === tab
-              return (
-                <button key={tab} onClick={()=>setSampleTab(tab)} style={{
-                  padding:'3px 12px', borderRadius:99, fontSize:10, fontWeight:600, cursor:'pointer',
-                  background:active?C.tagBg:C.bg,
-                  color:active?C.accent:C.text3,
-                  border:`1.5px solid ${active?C.accent:C.border}`,
-                  transition:'all .2s',
-                }}>{tab==='전체'?`전체 (${SAMPLES.length})`:tab==='0'?`숫자 0 (32)`:` 숫자 1 (32)`}</button>
-              )
-            })}
-          </div>
-          <div style={{maxHeight:220, overflowY:'auto', marginBottom:12, paddingRight:2}}>
-            <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:5}}>
-              {SAMPLES.map((s,i)=>{
-                const tab = sampleTab||'전체'
-                if(tab!=='전체' && s.label!==tab) return null
-                return (
-                  <button key={i} onClick={()=>{setSi(i);setStep(0)}} style={{
-                    border:`2px solid ${si===i?C.accent:C.border}`,
-                    background:si===i?C.tagBg:C.bg, borderRadius:8,
-                    padding:'5px 3px', cursor:'pointer',
-                    display:'flex', flexDirection:'column', alignItems:'center', gap:2,
-                    transition:'all .2s',
-                  }}>
-                    <PixelGrid pixels={s.pixels} px={10} lit={si===i}/>
-                    <span style={{fontSize:8, color:si===i?C.accent:C.text3, fontWeight:700}}>#{i+1}</span>
-                  </button>
-                )
-              })}
-            </div>
+          <Lbl>TRAINING SAMPLE</Lbl>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginBottom:12}}>
+            {SAMPLES.map((s,i)=>(
+              <button key={i} onClick={()=>{setSi(i);setStep(0)}} style={{
+                border:`2px solid ${si===i?C.accent:C.border}`,
+                background:si===i?C.tagBg:C.bg, borderRadius:10,
+                padding:'5px 3px', cursor:'pointer',
+                display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+                transition:'all .2s',
+              }}>
+                <PixelGrid pixels={s.pixels} px={10} lit={si===i}/>
+                <span style={{fontSize:9, color:si===i?C.accent:C.text3, fontWeight:700}}>"{s.label}"</span>
+              </button>
+            ))}
           </div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
             <div style={{background:C.bg3, borderRadius:10, padding:'10px', textAlign:'center'}}>
