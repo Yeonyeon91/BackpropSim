@@ -1,52 +1,59 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const LR_DEFAULT = 0.2
+// ─── Design tokens (matches existing project CSS variables) ──────────────────
+const C = {
+  bg:      '#f7f6f3',
+  bg2:     '#ffffff',
+  bg3:     '#f0eef9',
+  border:  '#e8e4f0',
+  border2: '#d4cfe8',
+  accent:  '#7c6ff7',
+  accent2: '#a78bfa',
+  accent3: '#34d399',
+  warm:    '#f97316',
+  danger:  '#f43f5e',
+  text:    '#1a1523',
+  text2:   '#6b6580',
+  text3:   '#a89fc0',
+  tagBg:   '#ede9fe',
+  tagText: '#5b21b6',
+  // semantic
+  orange:  '#d97706',
+  green:   '#059669',
+  red:     '#dc2626',
+}
 
-// Training samples from Excel: 10 samples (5 zeros, 5 ones)
-// Each is a 4×3 = 12-pixel pattern (row-major: 4 rows × 3 cols)
+// ─── Training samples: 10 × 12-pixel (4×3) patterns ─────────────────────────
+// Pattern layout: 4 rows × 3 cols, row-major
 const SAMPLES = [
-  // "0" patterns (target: [1, 0])
-  { pixels: [1,1,1, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s1' },
-  { pixels: [0,1,1, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s2' },
-  { pixels: [1,1,0, 1,0,1, 1,0,1, 1,1,1], target: [1,0], label:'0', id:'s3' },
-  { pixels: [1,1,1, 1,0,1, 1,0,1, 1,1,0], target: [1,0], label:'0', id:'s4' },
-  { pixels: [1,1,1, 1,0,1, 1,0,1, 0,1,1], target: [1,0], label:'0', id:'s5' },
-  // "1" patterns (target: [0, 1])
-  { pixels: [0,0,0, 0,1,1, 0,1,1, 0,1,1], target: [0,1], label:'1', id:'s6' },
-  { pixels: [0,1,1, 1,1,1, 0,1,1, 0,1,1], target: [0,1], label:'1', id:'s7' },
-  { pixels: [0,0,0, 1,1,0, 1,1,0, 1,1,0], target: [0,1], label:'1', id:'s8' },
-  { pixels: [0,0,0, 1,1,1, 1,1,1, 1,1,0], target: [0,1], label:'1', id:'s9' },
-  { pixels: [0,0,0, 1,1,1, 1,1,1, 0,1,1], target: [0,1], label:'1', id:'s10'},
+  { pixels:[1,1,1, 1,0,1, 1,0,1, 1,1,1], target:[1,0], label:'0', id:'s01' },
+  { pixels:[0,1,1, 1,0,1, 1,0,1, 1,1,1], target:[1,0], label:'0', id:'s02' },
+  { pixels:[1,1,0, 1,0,1, 1,0,1, 1,1,1], target:[1,0], label:'0', id:'s03' },
+  { pixels:[1,1,1, 1,0,1, 1,0,1, 1,1,0], target:[1,0], label:'0', id:'s04' },
+  { pixels:[1,1,1, 1,0,1, 1,0,1, 0,1,1], target:[1,0], label:'0', id:'s05' },
+  { pixels:[0,0,0, 0,1,1, 0,1,1, 0,1,1], target:[0,1], label:'1', id:'s06' },
+  { pixels:[0,1,1, 1,1,1, 0,1,1, 0,1,1], target:[0,1], label:'1', id:'s07' },
+  { pixels:[0,0,0, 1,1,0, 1,1,0, 1,1,0], target:[0,1], label:'1', id:'s08' },
+  { pixels:[0,0,0, 1,1,1, 1,1,1, 1,1,0], target:[0,1], label:'1', id:'s09' },
+  { pixels:[0,0,0, 1,1,1, 1,1,1, 0,1,1], target:[0,1], label:'1', id:'s10' },
 ]
 
-const STEP_LABELS = [
-  { id: 0, title: 'INPUT',       icon: '🖼️' },
-  { id: 1, title: 'FORWARD',     icon: '→'  },
-  { id: 2, title: 'OUTPUT',      icon: '📊' },
-  { id: 3, title: 'LOSS',        icon: '⚡' },
-  { id: 4, title: 'BACKPROP',    icon: '←'  },
-  { id: 5, title: 'UPDATE W',    icon: '↺'  },
-]
-
-const STEP_DESCRIPTIONS = [
-  '입력 이미지는 12개의 숫자(0 또는 1)로 펼쳐져 신경망에 들어갑니다. 각 픽셀이 하나의 입력 노드가 됩니다.',
-  '각 입력 픽셀에 weight를 곱해 더한 뒤 sigmoid를 적용합니다. 은닉층은 픽셀들의 조합에서 특징을 추출합니다.',
-  '은닉층의 출력이 다시 weight를 거쳐 출력층으로 전달됩니다. out₀는 숫자 0일 가능성, out₁는 숫자 1일 가능성입니다.',
-  'Loss는 예측값이 정답과 얼마나 다른지를 나타냅니다. Loss가 클수록 예측이 틀린 것입니다.',
-  'Backpropagation은 오차를 뒤로 보내어 어떤 weight를 얼마나 고칠지 계산하는 과정입니다. chain rule로 각 weight의 기여를 계산합니다.',
-  'gradient 방향 반대로 weight를 수정합니다. 이 과정을 반복하면 점점 정답에 가까워집니다.',
+const STEP_META = [
+  { id:0, label:'INPUT',    icon:'🖼️', desc:'입력 이미지는 12개의 숫자(0 또는 1)로 펼쳐져 신경망에 들어갑니다. 각 픽셀이 하나의 입력 노드가 됩니다.' },
+  { id:1, label:'FORWARD',  icon:'→',  desc:'각 입력 픽셀에 weight를 곱해 더한 뒤 sigmoid를 적용합니다. 은닉층은 픽셀들의 조합에서 특징을 추출합니다.' },
+  { id:2, label:'OUTPUT',   icon:'📊', desc:'은닉층 출력이 다시 weight를 거쳐 출력층으로 전달됩니다. out₀는 숫자 0일 가능성, out₁는 숫자 1일 가능성입니다.' },
+  { id:3, label:'LOSS',     icon:'⚡', desc:'Loss는 예측값이 정답과 얼마나 다른지를 나타냅니다. 공식: C = ½ × Σ(target − output)². Loss가 클수록 오차가 큽니다.' },
+  { id:4, label:'BACKPROP', icon:'←',  desc:'오차를 뒤로 전파해 각 weight가 loss에 얼마나 기여했는지 chain rule로 계산합니다. δ₃ → δ₂ 순서로 역전파됩니다.' },
+  { id:5, label:'UPDATE W', icon:'↺',  desc:'w_new = w_old + η·δ·a_prev. gradient 방향으로 weight를 수정합니다. 이 과정을 반복하면 점점 정답에 가까워집니다.' },
 ]
 
 const FORMULAS = [
-  ['입력', 'x₁, x₂, ..., x₁₂ ∈ {0, 1}'],
-  ['sigmoid', 'σ(z) = 1 / (1 + e⁻ᶻ)'],
-  ['은닉층', 'z₂ᵢ = Σ wᵢⱼ·xⱼ + bᵢ\na₂ᵢ = σ(z₂ᵢ)'],
-  ['출력층', 'z₃ₖ = Σ wₖᵢ·a₂ᵢ + bₖ\noutₖ = σ(z₃ₖ)'],
-  ['Loss', 'C = ½ Σ (target − out)²'],
-  ['δ₃ (출력)', 'δ₃ₖ = (targetₖ − outₖ) · outₖ · (1 − outₖ)'],
-  ['δ₂ (은닉)', 'δ₂ᵢ = (Σ δ₃ₖ · wₖᵢ) · a₂ᵢ · (1 − a₂ᵢ)'],
-  ['w 업데이트', 'w_new = w_old + η · δ · a_prev'],
+  { label:'입력 펼치기',   expr:'x₁, x₂, ..., x₁₂ ∈ {0, 1}' },
+  { label:'은닉층 계산',   expr:'z₂ᵢ = Σwᵢⱼ·xⱼ + bᵢ\na₂ᵢ = σ(z₂ᵢ) = 1/(1+e⁻ᶻ)' },
+  { label:'출력층 계산',   expr:'z₃ₖ = Σwₖᵢ·a₂ᵢ + bₖ\noutₖ = σ(z₃ₖ)' },
+  { label:'Loss 계산',     expr:'C = ½ × Σ(targetₖ − outₖ)²' },
+  { label:'δ 역전파',      expr:'δ₃ₖ = (tₖ−outₖ)·outₖ·(1−outₖ)\nδ₂ᵢ = (Σδ₃ₖ·wₖᵢ)·a₂ᵢ·(1−a₂ᵢ)' },
+  { label:'Weight 업데이트', expr:'w_new = w_old + η · δ · a_prev\nb_new = b_old + η · δ' },
 ]
 
 // ─── Math ────────────────────────────────────────────────────────────────────
@@ -55,57 +62,99 @@ const r4 = v => Math.round(v * 10000) / 10000
 const r3 = v => Math.round(v * 1000) / 1000
 
 function initWeights() {
-  // w1: [3][12], b1: [3]
-  // w2: [2][3],  b2: [2]
   const rand = () => r4((Math.random() - 0.5) * 2)
-  const w1 = Array.from({ length: 3 }, () => Array.from({ length: 12 }, rand))
-  const b1 = Array.from({ length: 3 }, rand)
-  const w2 = Array.from({ length: 2 }, () => Array.from({ length: 3 }, rand))
-  const b2 = Array.from({ length: 2 }, rand)
-  return { w1, b1, w2, b2 }
+  return {
+    w1: Array.from({ length: 3 }, () => Array.from({ length: 12 }, rand)),
+    b1: Array.from({ length: 3 }, rand),
+    w2: Array.from({ length: 2 }, () => Array.from({ length: 3 }, rand)),
+    b2: Array.from({ length: 2 }, rand),
+  }
 }
 
-function forward(inputs, w1, b1, w2, b2) {
-  // Hidden layer
+function forward(inputs, { w1, b1, w2, b2 }) {
   const z2 = b1.map((b, i) => r4(b + w1[i].reduce((s, w, j) => s + w * inputs[j], 0)))
   const a2 = z2.map(z => r4(sigmoid(z)))
-  // Output layer
   const z3 = b2.map((b, i) => r4(b + w2[i].reduce((s, w, j) => s + w * a2[j], 0)))
   const a3 = z3.map(z => r4(sigmoid(z)))
   return { z2, a2, z3, a3 }
 }
 
 function computeGrads(inputs, a2, a3, target, w2) {
-  // δ₃
   const d3 = a3.map((o, k) => r4((target[k] - o) * o * (1 - o)))
-  // δ₂
-  const d2 = a2.map((a, i) => {
-    const sum = d3.reduce((s, d, k) => s + d * w2[k][i], 0)
-    return r4(sum * a * (1 - a))
-  })
-  // Loss
+  const d2 = a2.map((a, i) => r4(d3.reduce((s, d, k) => s + d * w2[k][i], 0) * a * (1 - a)))
   const loss = r4(0.5 * a3.reduce((s, o, k) => s + (target[k] - o) ** 2, 0))
   return { d3, d2, loss }
 }
 
-function updateWeights({ w1, b1, w2, b2 }, inputs, a2, d2, d3, lr) {
-  const nw2 = w2.map((row, k) => row.map((w, i) => r4(w + lr * d3[k] * a2[i])))
-  const nb2 = b2.map((b, k) => r4(b + lr * d3[k]))
-  const nw1 = w1.map((row, i) => row.map((w, j) => r4(w + lr * d2[i] * inputs[j])))
-  const nb1 = b1.map((b, i) => r4(b + lr * d2[i]))
-  return { w1: nw1, b1: nb1, w2: nw2, b2: nb2 }
+function applyUpdate({ w1, b1, w2, b2 }, inputs, a2, { d2, d3 }, lr) {
+  return {
+    w1: w1.map((row, i) => row.map((w, j) => r4(w + lr * d2[i] * inputs[j]))),
+    b1: b1.map((b, i) => r4(b + lr * d2[i])),
+    w2: w2.map((row, k) => row.map((w, i) => r4(w + lr * d3[k] * a2[i]))),
+    b2: b2.map((b, k) => r4(b + lr * d3[k])),
+  }
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+// ─── Tiny components ─────────────────────────────────────────────────────────
 
-function PixelGrid({ pixels, highlight = false }) {
+function Card({ children, style = {} }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2, width: 72 }}>
+    <div style={{ background: C.bg2, borderRadius: 16, border: `1px solid ${C.border}`, ...style }}>
+      {children}
+    </div>
+  )
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 600, color: C.text3, letterSpacing: '1.5px', marginBottom: 12 }}>
+      {children}
+    </div>
+  )
+}
+
+function Tag({ children, color = C.accent, bg = C.tagBg }) {
+  return (
+    <span style={{ background: bg, color, fontSize: 10, fontWeight: 600, padding: '2px 10px', borderRadius: 99, letterSpacing: 0.5 }}>
+      {children}
+    </span>
+  )
+}
+
+function Btn({ children, onClick, disabled, variant = 'primary', style = {} }) {
+  const variants = {
+    primary:  { bg: C.accent,  color: '#fff',   border: C.accent,  shadow: '0 2px 12px rgba(124,111,247,0.3)' },
+    outline:  { bg: C.bg2,     color: C.accent,  border: C.accent,  shadow: 'none' },
+    ghost:    { bg: C.bg,      color: C.text2,   border: C.border2, shadow: 'none' },
+    green:    { bg: '#ecfdf5', color: C.green,   border: '#86efac', shadow: 'none' },
+    orange:   { bg: '#fffbeb', color: C.orange,  border: '#fcd34d', shadow: 'none' },
+    danger:   { bg: '#fff1f2', color: C.red,     border: '#fecaca', shadow: 'none' },
+  }
+  const v = variants[variant]
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      background: v.bg, color: v.color, border: `1.5px solid ${v.border}`,
+      borderRadius: 10, padding: '9px 16px', fontSize: 12, fontWeight: 600,
+      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
+      letterSpacing: 0.3, boxShadow: v.shadow, transition: 'all 0.15s',
+      fontFamily: 'inherit', whiteSpace: 'nowrap', ...style,
+    }}>
+      {children}
+    </button>
+  )
+}
+
+// 4×3 pixel grid
+function PixelGrid({ pixels, size = 'md', highlightOn = false }) {
+  const px = size === 'sm' ? 14 : size === 'lg' ? 24 : 18
+  const gap = size === 'sm' ? 2 : 3
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap, width: px * 3 + gap * 2 }}>
       {pixels.map((v, i) => (
         <div key={i} style={{
-          width: 22, height: 22, borderRadius: 3,
-          background: v === 1 ? (highlight ? '#7c6ff7' : '#1a1523') : '#e8e4f0',
-          border: '1px solid #c9c2e0',
+          width: px, height: px, borderRadius: size === 'sm' ? 2 : 3,
+          background: v === 1 ? (highlightOn ? C.accent : C.text) : C.bg3,
+          border: `1px solid ${v === 1 ? (highlightOn ? C.accent2 : C.border2) : C.border}`,
           transition: 'background 0.3s',
         }} />
       ))}
@@ -113,417 +162,431 @@ function PixelGrid({ pixels, highlight = false }) {
   )
 }
 
-function NodeCircle({ value, size = 38, color = '#7c6ff7', label, glow = false, style = {} }) {
-  const alpha = Math.min(0.15 + Math.abs(value ?? 0) * 0.7, 0.95)
+// Single neuron node
+function Neuron({ value, label, size = 44, color = C.accent, glow = false, sub }) {
+  const intensity = Math.min(0.1 + Math.abs(value ?? 0) * 0.6, 0.85)
   return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: `rgba(${color === '#7c6ff7' ? '124,111,247' : color === '#d97706' ? '217,119,6' : '220,38,38'},${alpha})`,
-      border: `2px solid ${glow ? '#d97706' : color}`,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      boxShadow: glow ? `0 0 12px ${color}88` : 'none',
-      transition: 'all 0.4s',
-      ...style,
-    }}>
-      {value !== undefined && (
-        <span style={{ fontSize: 9, fontFamily: "'DM Mono',monospace", color: '#1a1523', fontWeight: 700, lineHeight: 1 }}>
-          {r3(value)}
-        </span>
-      )}
-      {label && <span style={{ fontSize: 7, color: '#6b6580', marginTop: 1 }}>{label}</span>}
-    </div>
-  )
-}
-
-function FormulaBox({ step }) {
-  const f = FORMULAS[Math.min(step, FORMULAS.length - 1)]
-  return (
-    <div style={{
-      background: '#1a1523', borderRadius: 10, padding: '12px 16px',
-      border: '1px solid #3a3050', minHeight: 80,
-    }}>
-      <div style={{ fontSize: 9, color: '#7c6ff7', letterSpacing: 2, marginBottom: 6 }}>FORMULA</div>
-      <div style={{ fontSize: 10, color: '#aaa3c0', fontWeight: 600, marginBottom: 4 }}>{f[0]}</div>
-      <pre style={{ fontSize: 11, color: '#e8e4f0', fontFamily: "'DM Mono',monospace", margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-        {f[1]}
-      </pre>
-    </div>
-  )
-}
-
-function StepBadge({ label, icon, active, done }) {
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'default',
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
       <div style={{
-        width: 32, height: 32, borderRadius: '50%',
-        background: active ? '#7c6ff7' : done ? '#22c55e22' : '#2a2040',
-        border: `2px solid ${active ? '#7c6ff7' : done ? '#22c55e' : '#3a3050'}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 14, color: active ? '#fff' : done ? '#22c55e' : '#6b6580',
-        boxShadow: active ? '0 0 16px #7c6ff755' : 'none',
-        transition: 'all 0.3s',
+        width: size, height: size, borderRadius: '50%',
+        background: `rgba(124,111,247,${intensity})`,
+        border: `2px solid ${glow ? C.orange : color}`,
+        boxShadow: glow ? `0 0 14px ${C.orange}55` : `0 1px 4px rgba(124,111,247,0.15)`,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        transition: 'all 0.4s',
       }}>
-        {done && !active ? '✓' : icon}
+        {value !== undefined && (
+          <span style={{ fontSize: 9, fontFamily: "'DM Mono',monospace", color: C.text, fontWeight: 600 }}>
+            {r3(value)}
+          </span>
+        )}
       </div>
-      <span style={{ fontSize: 8, letterSpacing: 1, color: active ? '#7c6ff7' : done ? '#22c55e' : '#6b6580', fontWeight: active ? 700 : 400 }}>
-        {label}
-      </span>
+      {label && <span style={{ fontSize: 9, color: C.text3, fontFamily: "'DM Mono',monospace" }}>{label}</span>}
+      {sub && <span style={{ fontSize: 8, color: C.orange, fontFamily: "'DM Mono',monospace" }}>{sub}</span>}
     </div>
   )
+}
+
+// Arrow between layers
+function LayerArrow({ active, label }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '0 6px' }}>
+      <div style={{ fontSize: 18, color: active ? C.accent : C.border, transition: 'color 0.3s' }}>→</div>
+      {label && <span style={{ fontSize: 8, color: C.text3, fontFamily: "'DM Mono',monospace", textAlign: 'center' }}>{label}</span>}
+    </div>
+  )
+}
+
+// Step progress pill row
+function StepProgress({ step }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+      {STEP_META.map((s, i) => (
+        <React.Fragment key={s.id}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', borderRadius: 99,
+            background: step === i ? C.tagBg : 'transparent',
+            border: step === i ? `1.5px solid ${C.accent}` : '1.5px solid transparent',
+            transition: 'all 0.25s',
+          }}>
+            <span style={{ fontSize: 12 }}>{s.icon}</span>
+            <span style={{
+              fontSize: 10, fontWeight: step === i ? 700 : 400,
+              color: step === i ? C.accent : step > i ? C.accent3 : C.text3,
+              letterSpacing: 0.5,
+            }}>
+              {step > i ? '✓' : `${i+1}.`} {s.label}
+            </span>
+          </div>
+          {i < STEP_META.length - 1 && (
+            <div style={{ width: 16, height: 1.5, background: step > i ? C.accent : C.border, transition: 'background 0.3s', flexShrink: 0 }} />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// Weight color (blue-positive, red-negative, matches project style)
+function wBg(v) {
+  if (v > 0) return `rgba(124,111,247,${Math.min(0.08 + v * 0.18, 0.45)})`
+  return `rgba(244,63,94,${Math.min(0.08 + Math.abs(v) * 0.18, 0.45)})`
+}
+function wColor(v) { return v >= 0 ? '#4c3fc9' : '#be123c' }
+
+// Loss curve canvas
+function LossCurve({ history, epoch }) {
+  const ref = useRef()
+  useEffect(() => {
+    const canvas = ref.current; if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const W = canvas.width, H = canvas.height
+    ctx.clearRect(0, 0, W, H)
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H)
+    if (history.length < 2) return
+    const max = Math.max(...history, 0.01)
+    const slice = history.slice(-200)
+    const pts = slice.map((v, i) => ({
+      x: 8 + (i / (slice.length - 1)) * (W - 16),
+      y: H - 6 - (v / max) * (H - 14),
+    }))
+    // Fill
+    ctx.beginPath()
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
+    ctx.lineTo(pts[pts.length-1].x, H-6); ctx.lineTo(pts[0].x, H-6)
+    ctx.fillStyle = 'rgba(124,111,247,0.08)'; ctx.fill()
+    // Line
+    ctx.beginPath()
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 1.5; ctx.stroke()
+    // Labels
+    const last = history[history.length-1]
+    ctx.fillStyle = C.text2; ctx.font = '9px DM Mono, Courier New'
+    ctx.fillText(`loss: ${last.toFixed(5)}`, 8, 12)
+    ctx.fillStyle = C.text3
+    ctx.fillText(`epoch ${epoch}`, W - 60, 12)
+  }, [history, epoch])
+  return <canvas ref={ref} width={560} height={64} style={{ width:'100%', borderRadius: 8, display:'block' }} />
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function BackpropVisualizerPage() {
   const [weights, setWeights] = useState(() => initWeights())
   const [sampleIdx, setSampleIdx] = useState(0)
-  const [lr, setLr] = useState(LR_DEFAULT)
-  const [step, setStep] = useState(0)            // 0–5
-  const [fwd, setFwd] = useState(null)           // { z2, a2, z3, a3 }
-  const [grads, setGrads] = useState(null)       // { d3, d2, loss }
+  const [lr, setLr] = useState(0.2)
+  const [step, setStep]   = useState(0)
+  const [fwd,  setFwd]    = useState(null)
+  const [grads, setGrads] = useState(null)
   const [lossHistory, setLossHistory] = useState([])
   const [epoch, setEpoch] = useState(0)
   const [autoRunning, setAutoRunning] = useState(false)
-  const [hoveredWeight, setHoveredWeight] = useState(null) // { layer, j, i, value }
+  const [hoveredW, setHoveredW] = useState(null)
   const autoRef = useRef(false)
-  const lossCanvasRef = useRef()
 
-  const sample = SAMPLES[sampleIdx]
-  const inputs = sample.pixels
-  const target = sample.target
+  const sample  = SAMPLES[sampleIdx]
+  const inputs  = sample.pixels
+  const target  = sample.target
 
-  // Recompute forward when sample or weights change
+  // Recompute forward whenever sample or weights change
   useEffect(() => {
-    const f = forward(inputs, weights.w1, weights.b1, weights.w2, weights.b2)
-    setFwd(f)
+    setFwd(forward(inputs, weights))
     setGrads(null)
     setStep(0)
   }, [sampleIdx, weights])
 
-  // Draw loss curve
-  useEffect(() => {
-    const canvas = lossCanvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    const W = canvas.width, H = canvas.height
-    ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#1a1523'; ctx.fillRect(0, 0, W, H)
-    if (lossHistory.length < 2) return
-    const max = Math.max(...lossHistory, 0.01)
-    const pts = lossHistory.slice(-200).map((v, i, arr) => ({
-      x: 8 + (i / (arr.length - 1)) * (W - 16),
-      y: H - 8 - (v / max) * (H - 16),
-    }))
-    ctx.beginPath()
-    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
-    ctx.strokeStyle = '#7c6ff7'; ctx.lineWidth = 1.5; ctx.stroke()
-    const last = lossHistory[lossHistory.length - 1]
-    ctx.fillStyle = '#7c6ff7'; ctx.font = '9px Courier New'
-    ctx.fillText(`loss: ${last.toFixed(5)}`, 8, 14)
-    ctx.fillStyle = '#6b6580'; ctx.fillText(`epoch: ${epoch}`, 8, 26)
-  }, [lossHistory, epoch])
-
+  // ── Step machine ────────────────────────────────────────────────────────────
   function nextStep() {
-    if (step === 0) {
-      // Already have fwd from useEffect; move to step 1
-      setStep(1)
-    } else if (step === 1) {
-      setStep(2)
-    } else if (step === 2) {
-      setStep(3)
-    } else if (step === 3) {
+    if (step === 0) { setStep(1); return }
+    if (step === 1) { setStep(2); return }
+    if (step === 2) { setStep(3); return }
+    if (step === 3) {
       const g = computeGrads(inputs, fwd.a2, fwd.a3, target, weights.w2)
       setGrads(g)
       setLossHistory(h => [...h.slice(-299), g.loss])
-      setStep(4)
-    } else if (step === 4) {
-      setStep(5)
-    } else if (step === 5) {
-      // Apply update
-      const g = grads || computeGrads(inputs, fwd.a2, fwd.a3, target, weights.w2)
-      const nw = updateWeights(weights, inputs, fwd.a2, g.d2, g.d3, lr)
-      setWeights(nw)
+      setStep(4); return
+    }
+    if (step === 4) { setStep(5); return }
+    if (step === 5) {
+      const g = grads ?? computeGrads(inputs, fwd.a2, fwd.a3, target, weights.w2)
+      setWeights(applyUpdate(weights, inputs, fwd.a2, g, lr))
       setEpoch(e => e + 1)
       setStep(0)
     }
   }
 
+  // ── Train helpers ───────────────────────────────────────────────────────────
   function trainOneEpoch() {
-    let w = { ...weights }
-    let totalLoss = 0
+    let w = weights; let totalLoss = 0
     for (const s of SAMPLES) {
-      const f = forward(s.pixels, w.w1, w.b1, w.w2, w.b2)
+      const f = forward(s.pixels, w)
       const g = computeGrads(s.pixels, f.a2, f.a3, s.target, w.w2)
-      w = updateWeights(w, s.pixels, f.a2, g.d2, g.d3, lr)
+      w = applyUpdate(w, s.pixels, f.a2, g, lr)
       totalLoss += g.loss
     }
-    setWeights(w)
-    setEpoch(e => e + 1)
+    setWeights(w); setEpoch(e => e+1)
     setLossHistory(h => [...h.slice(-299), r4(totalLoss / SAMPLES.length)])
     setStep(0)
   }
 
   async function trainN(n) {
-    autoRef.current = true
-    setAutoRunning(true)
-    let w = { ...weights }
-    for (let ep = 0; ep < n; ep++) {
-      if (!autoRef.current) break
+    autoRef.current = true; setAutoRunning(true)
+    let w = weights; let ep = 0
+    while (autoRef.current && ep < n) {
       let totalLoss = 0
       for (const s of SAMPLES) {
-        const f = forward(s.pixels, w.w1, w.b1, w.w2, w.b2)
+        const f = forward(s.pixels, w)
         const g = computeGrads(s.pixels, f.a2, f.a3, s.target, w.w2)
-        w = updateWeights(w, s.pixels, f.a2, g.d2, g.d3, lr)
+        w = applyUpdate(w, s.pixels, f.a2, g, lr)
         totalLoss += g.loss
       }
-      if (ep % 10 === 0) {
-        setWeights({ ...w })
-        setEpoch(e => e + n > e ? e + 10 : e)
+      ep++
+      if (ep % 20 === 0) {
+        setWeights({ ...w }); setEpoch(e => e + 20)
         setLossHistory(h => [...h.slice(-299), r4(totalLoss / SAMPLES.length)])
         await new Promise(r => setTimeout(r, 1))
       }
     }
-    setWeights({ ...w })
-    setEpoch(e => e + n)
-    autoRef.current = false
-    setAutoRunning(false)
+    setWeights({ ...w }); setEpoch(e => e + ep % 20)
+    autoRef.current = false; setAutoRunning(false)
   }
 
   function resetAll() {
-    autoRef.current = false
-    setAutoRunning(false)
-    setWeights(initWeights())
-    setFwd(null); setGrads(null); setStep(0)
-    setLossHistory([]); setEpoch(0)
+    autoRef.current = false; setAutoRunning(false)
+    setWeights(initWeights()); setFwd(null); setGrads(null)
+    setStep(0); setLossHistory([]); setEpoch(0)
   }
 
-  // Prediction
+  // ── Derived ──────────────────────────────────────────────────────────────────
   const out = fwd?.a3 ?? [0.5, 0.5]
   const pred = out[0] > out[1] ? 0 : 1
   const isCorrect = pred === parseInt(sample.label)
-  const totalLoss = grads?.loss ?? (fwd ? r4(0.5 * fwd.a3.reduce((s, o, k) => s + (target[k] - o) ** 2, 0)) : null)
+  const displayLoss = grads?.loss ?? (fwd ? r4(0.5 * fwd.a3.reduce((s,o,k)=>s+(target[k]-o)**2,0)) : null)
 
-  // Colors
-  const c = { accent: '#7c6ff7', orange: '#d97706', red: '#dc2626', green: '#22c55e', bg: '#0e0c16', bg2: '#1a1523', bg3: '#22193a', border: '#2a2040', text: '#e8e4f0', text2: '#aaa3c0', text3: '#6b6580' }
+  const accuracy = (() => {
+    if (epoch === 0) return null
+    const correct = SAMPLES.filter(s => {
+      const f = forward(s.pixels, weights)
+      return (f.a3[0] > f.a3[1] ? 0 : 1) === parseInt(s.label)
+    }).length
+    return `${correct}/${SAMPLES.length}`
+  })()
 
-  // Weight color helper
-  const wColor = (v) => v > 0
-    ? `rgba(100,120,255,${Math.min(0.2 + Math.abs(v) * 0.5, 0.9)})`
-    : `rgba(220,60,60,${Math.min(0.2 + Math.abs(v) * 0.5, 0.9)})`
+  const formula = FORMULAS[Math.min(step, FORMULAS.length-1)]
 
+  // ────────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ background: c.bg, minHeight: '100vh', color: c.text, fontFamily: "'DM Mono', monospace", padding: '20px 16px' }}>
-
-      {/* ── Header ── */}
-      <div style={{ marginBottom: 20, borderBottom: `1px solid ${c.border}`, paddingBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 800, color: c.text, margin: 0, letterSpacing: -0.5 }}>
-            🧠 Backpropagation Visualizer
+    <div>
+      {/* ── Page header ── */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: C.text, margin: 0, letterSpacing: '-0.3px' }}>
+            🧠 Backprop Visualizer
           </h2>
-          <span style={{ fontSize: 10, color: c.accent, letterSpacing: 2, fontWeight: 600 }}>
-            EXCEL LECTURE 07 · 12→3→2
-          </span>
+          <Tag>Excel Lecture 07</Tag>
+          <Tag bg='#ecfdf5' color={C.green}>12 → 3 → 2</Tag>
         </div>
-        <p style={{ fontSize: 11, color: c.text2, margin: 0, lineHeight: 1.6 }}>
-          Excel 예제의 역전파 계산 과정을 웹에서 단계별로 재현합니다. 4×3 픽셀 입력 → 은닉층 3개 → 출력층 2개 → 숫자 0 또는 1 예측
+        <p style={{ fontSize: 13, color: C.text2, margin: 0, lineHeight: 1.6 }}>
+          Excel 예제의 역전파 계산 과정을 웹에서 단계별로 재현합니다.
+          4×3 픽셀 입력 → 은닉층 3개 → 출력층 2개 → 숫자 0 또는 1 예측.
         </p>
       </div>
 
-      {/* ── Step progress bar ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 16, background: c.bg2, borderRadius: 12, padding: '10px 16px', border: `1px solid ${c.border}` }}>
-        {STEP_LABELS.map((s, i) => (
-          <React.Fragment key={s.id}>
-            <StepBadge label={s.title} icon={s.icon} active={step === i} done={step > i} />
-            {i < STEP_LABELS.length - 1 && (
-              <div style={{ flex: 1, height: 2, background: step > i ? c.accent : c.border, margin: '0 4px', borderRadius: 2, transition: 'background 0.4s', marginBottom: 12 }} />
-            )}
-          </React.Fragment>
-        ))}
+      {/* ── Step progress ── */}
+      <Card style={{ padding: '12px 16px', marginBottom: 14, overflowX: 'auto' }}>
+        <StepProgress step={step} />
+      </Card>
+
+      {/* ── Current step description ── */}
+      <div style={{
+        background: C.tagBg, borderRadius: 12, padding: '10px 16px', marginBottom: 16,
+        borderLeft: `3px solid ${C.accent}`,
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+      }}>
+        <span style={{ fontSize: 18, lineHeight: 1.3 }}>{STEP_META[step].icon}</span>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.accent, letterSpacing: 1, marginBottom: 3 }}>
+            STEP {step+1} · {STEP_META[step].label}
+          </div>
+          <p style={{ fontSize: 12, color: C.text, margin: 0, lineHeight: 1.6 }}>
+            {STEP_META[step].desc}
+          </p>
+        </div>
       </div>
 
-      {/* ── Main layout: Network | Controls ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 14 }}>
+      {/* ── Main grid: network + controls ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 272px', gap: 14, alignItems: 'start' }}>
 
-        {/* ── LEFT: Network visualization ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* ══ LEFT column ══ */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-          {/* Step description */}
-          <div style={{ background: c.bg3, borderRadius: 10, padding: '10px 14px', border: `1px solid ${c.border}`, borderLeft: `3px solid ${c.accent}` }}>
-            <div style={{ fontSize: 9, color: c.accent, letterSpacing: 2, marginBottom: 4 }}>
-              STEP {step + 1} · {STEP_LABELS[step]?.title}
-            </div>
-            <p style={{ fontSize: 11, color: c.text2, margin: 0, lineHeight: 1.7 }}>
-              {STEP_DESCRIPTIONS[step]}
-            </p>
-          </div>
+          {/* Network diagram */}
+          <Card style={{ padding: 20 }}>
+            <SectionLabel>NEURAL NETWORK  12 → 3 → 2</SectionLabel>
 
-          {/* Network visualization area */}
-          <div style={{ background: c.bg2, borderRadius: 14, border: `1px solid ${c.border}`, padding: 16, display: 'flex', gap: 20, alignItems: 'center', minHeight: 340 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflowX: 'auto', paddingBottom: 4 }}>
 
-            {/* INPUT LAYER — pixel grid + 12 nodes */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>INPUT</div>
-              <PixelGrid pixels={inputs} highlight={step >= 1} />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 3, marginTop: 4 }}>
-                {inputs.map((v, i) => (
-                  <div key={i} style={{
-                    width: 28, height: 18, borderRadius: 4,
-                    background: v === 1 ? (step >= 1 ? '#7c6ff722' : '#22193a') : '#0e0c16',
-                    border: `1px solid ${v === 1 ? c.accent : c.border}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 9, color: v === 1 ? c.accent : c.text3,
-                    fontWeight: 700, transition: 'all 0.4s',
-                  }}>{v}</div>
-                ))}
-              </div>
-              <div style={{ fontSize: 8, color: c.text3 }}>12 pixels</div>
-            </div>
-
-            {/* Arrow input → hidden */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              <div style={{ fontSize: 9, color: step >= 1 ? c.accent : c.border }}>
-                {step >= 1 ? '━━▶' : '───'}
-              </div>
-              {step >= 1 && (
-                <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', maxWidth: 50 }}>
-                  w₁<br/>×x
+              {/* INPUT */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: C.text3, letterSpacing: 1 }}>INPUT</div>
+                <PixelGrid pixels={inputs} size='lg' highlightOn={step >= 1} />
+                {/* Show 12 nodes compactly */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 2, marginTop: 4 }}>
+                  {inputs.map((v, i) => (
+                    <div key={i} style={{
+                      width: 22, height: 16, borderRadius: 3,
+                      background: v === 1 ? (step >= 1 ? C.tagBg : C.bg3) : C.bg,
+                      border: `1px solid ${v === 1 ? (step >= 1 ? C.accent : C.border2) : C.border}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 8, color: v === 1 ? C.accent : C.text3, fontWeight: 700,
+                      transition: 'all 0.3s', fontFamily: "'DM Mono',monospace",
+                    }}>{v}</div>
+                  ))}
                 </div>
-              )}
-            </div>
+                <div style={{ fontSize: 9, color: C.text3 }}>12 pixels</div>
+              </div>
 
-            {/* HIDDEN LAYER — 3 nodes */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>HIDDEN</div>
-              {[0, 1, 2].map(i => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <NodeCircle
-                    value={fwd ? fwd.a2[i] : undefined}
-                    size={48}
-                    color={step === 4 ? '#d97706' : '#7c6ff7'}
-                    glow={step === 1 || step === 4}
+              <LayerArrow active={step >= 1} label={step >= 1 ? 'w₁ × x' : 'w₁'} />
+
+              {/* HIDDEN */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: C.text3, letterSpacing: 1 }}>HIDDEN</div>
+                {[0,1,2].map(i => (
+                  <Neuron key={i}
+                    value={step >= 1 && fwd ? fwd.a2[i] : undefined}
                     label={`h${i+1}`}
+                    size={46}
+                    glow={step === 1 || step === 4}
+                    sub={step === 4 && grads ? `δ=${r3(grads.d2[i])}` : step >= 1 && fwd ? `z=${r3(fwd.z2[i])}` : undefined}
                   />
-                  {step >= 1 && fwd && (
-                    <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', lineHeight: 1.4 }}>
-                      <div>z={r3(fwd.z2[i])}</div>
-                      {step === 4 && grads && (
-                        <div style={{ color: c.orange }}>δ={r3(grads.d2[i])}</div>
-                      )}
+                ))}
+                <div style={{ fontSize: 9, color: C.text3 }}>3 nodes · sigmoid</div>
+              </div>
+
+              <LayerArrow active={step >= 2} label={step >= 2 ? 'w₂ × a₂' : 'w₂'} />
+
+              {/* OUTPUT */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: C.text3, letterSpacing: 1 }}>OUTPUT</div>
+                {[0,1].map(k => {
+                  const isTarget = target[k] === 1
+                  const nodeColor = step >= 2 ? (isTarget ? C.green : C.danger) : C.accent
+                  return (
+                    <div key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                      <div style={{
+                        width: 52, height: 52, borderRadius: '50%',
+                        background: step >= 2 && fwd
+                          ? `rgba(${isTarget?'5,150,105':'220,38,38'},${0.1 + fwd.a3[k]*0.5})`
+                          : C.bg3,
+                        border: `2px solid ${step >= 2 ? nodeColor : C.border2}`,
+                        boxShadow: step >= 2 ? `0 0 16px ${nodeColor}33` : 'none',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                        transition: 'all 0.4s',
+                      }}>
+                        {step >= 2 && fwd && (
+                          <span style={{ fontSize: 10, fontFamily: "'DM Mono',monospace", color: C.text, fontWeight: 700 }}>
+                            {r3(fwd.a3[k])}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'center', lineHeight: 1.5 }}>
+                        <div style={{ fontSize: 9, color: C.text3, fontFamily: "'DM Mono',monospace" }}>out{k}</div>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: isTarget ? C.green : C.text3 }}>t={target[k]}</div>
+                        {step >= 4 && grads && (
+                          <div style={{ fontSize: 8, color: C.orange, fontFamily: "'DM Mono',monospace" }}>δ={r3(grads.d3[k])}</div>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  )
+                })}
+                <div style={{ fontSize: 9, color: C.text3 }}>2 nodes · sigmoid</div>
+              </div>
+
+              {/* RESULT */}
+              <div style={{ marginLeft: 8, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: C.text3, letterSpacing: 1 }}>RESULT</div>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%',
+                  background: step >= 2 ? (isCorrect ? '#ecfdf5' : '#fff1f2') : C.bg3,
+                  border: `3px solid ${step >= 2 ? (isCorrect ? C.green : C.danger) : C.border2}`,
+                  boxShadow: step >= 2 ? `0 0 20px ${isCorrect ? C.green : C.danger}33` : 'none',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.4s',
+                }}>
+                  <span style={{ fontSize: 24, fontWeight: 800, color: step >= 2 ? (isCorrect ? C.green : C.danger) : C.text3 }}>
+                    {step >= 2 ? pred : '?'}
+                  </span>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: step >= 2 ? (isCorrect ? C.green : C.danger) : C.text3 }}>
+                    {step >= 2 ? (isCorrect ? '✓ OK' : '✗ ERR') : ''}
+                  </span>
+                </div>
+                {step >= 3 && displayLoss !== null && (
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, color: C.text3 }}>LOSS</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: displayLoss < 0.05 ? C.green : C.danger, fontFamily: "'DM Mono',monospace" }}>
+                      {displayLoss.toFixed(5)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
+              {[
+                { color: 'rgba(124,111,247,0.4)', label: 'positive weight' },
+                { color: 'rgba(244,63,94,0.4)',   label: 'negative weight' },
+                { color: C.orange,                label: 'gradient / δ' },
+                { color: C.green,                 label: 'target node' },
+              ].map(({ color, label }) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <div style={{ width: 20, height: 4, background: color, borderRadius: 2 }} />
+                  <span style={{ fontSize: 10, color: C.text3 }}>{label}</span>
                 </div>
               ))}
-              <div style={{ fontSize: 8, color: c.text3 }}>3 nodes</div>
             </div>
+          </Card>
 
-            {/* Arrow hidden → output */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              <div style={{ fontSize: 9, color: step >= 2 ? c.accent : c.border }}>
-                {step >= 2 ? '━━▶' : '───'}
-              </div>
-              {step >= 2 && (
-                <div style={{ fontSize: 8, color: c.text3, textAlign: 'center', maxWidth: 50 }}>
-                  w₂<br/>×a₂
-                </div>
-              )}
-            </div>
+          {/* Weight tables */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
 
-            {/* OUTPUT LAYER — 2 nodes */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>OUTPUT</div>
-              {[0, 1].map(k => (
-                <div key={k} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <NodeCircle
-                    value={fwd ? fwd.a3[k] : undefined}
-                    size={52}
-                    color={step === 3 || step === 4 ? (k === target.indexOf(Math.max(...target)) ? '#22c55e' : '#dc2626') : '#7c6ff7'}
-                    glow={step === 2 || step === 3}
-                    label={`out${k}`}
-                  />
-                  <div style={{ fontSize: 8, textAlign: 'center', lineHeight: 1.5 }}>
-                    {step >= 2 && fwd && <div style={{ color: c.text3 }}>z={r3(fwd.z3[k])}</div>}
-                    <div style={{ color: target[k] === 1 ? c.green : c.text3, fontWeight: 700 }}>
-                      t={target[k]}
-                    </div>
-                    {step >= 3 && grads && (
-                      <div style={{ color: c.orange }}>δ={r3(grads.d3[k])}</div>
-                    )}
-                  </div>
-                </div>
-              ))}
-              <div style={{ fontSize: 8, color: c.text3 }}>2 nodes</div>
-            </div>
-
-            {/* PREDICTION RESULT */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontSize: 8, color: c.text3, letterSpacing: 2 }}>RESULT</div>
-              <div style={{
-                width: 60, height: 60, borderRadius: '50%',
-                background: step >= 2 ? (isCorrect ? '#22c55e22' : '#dc262622') : '#1a1523',
-                border: `3px solid ${step >= 2 ? (isCorrect ? c.green : c.red) : c.border}`,
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                transition: 'all 0.4s',
-                boxShadow: step >= 2 ? `0 0 20px ${isCorrect ? c.green : c.red}44` : 'none',
-              }}>
-                <span style={{ fontSize: 22, fontWeight: 800, color: step >= 2 ? (isCorrect ? c.green : c.red) : c.text3 }}>
-                  {step >= 2 ? pred : '?'}
-                </span>
-                <span style={{ fontSize: 8, color: step >= 2 ? (isCorrect ? c.green : c.red) : c.text3 }}>
-                  {step >= 2 ? (isCorrect ? '✓ OK' : '✗ ERR') : ''}
-                </span>
-              </div>
-              {step >= 3 && totalLoss !== null && (
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 8, color: c.text3 }}>LOSS</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: totalLoss > 0.1 ? c.red : c.green }}>
-                    {totalLoss.toFixed(5)}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Weight matrices ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-
-            {/* W1 matrix (3×12, shown compactly) */}
-            <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
-              <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>
-                W₁ HIDDEN WEIGHTS (3×12)
-                {step === 5 && <span style={{ color: c.orange, marginLeft: 8 }}>← updating</span>}
-              </div>
+            {/* W1 */}
+            <Card style={{ padding: 16 }}>
+              <SectionLabel>
+                W₁ · HIDDEN WEIGHTS&nbsp;
+                <span style={{ fontWeight: 400, color: C.text3 }}>(3 × 12)</span>
+                {step === 5 && <span style={{ color: C.orange, marginLeft: 6 }}>← updating</span>}
+              </SectionLabel>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', fontSize: 9, fontFamily: "'DM Mono',monospace" }}>
+                <table style={{ borderCollapse: 'collapse', fontSize: 9, fontFamily: "'DM Mono',monospace", width: '100%' }}>
                   <thead>
                     <tr>
-                      <th style={{ padding: '2px 4px', color: c.text3, textAlign: 'left' }}>h</th>
+                      <th style={{ padding: '2px 4px', color: C.text3, textAlign: 'left', fontWeight: 600 }}></th>
                       {Array.from({ length: 12 }, (_, j) => (
-                        <th key={j} style={{ padding: '2px 3px', color: c.text3, fontSize: 8 }}>x{j+1}</th>
+                        <th key={j} style={{ padding: '2px 3px', color: C.text3, fontSize: 8, fontWeight: 400 }}>x{j+1}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {weights.w1.map((row, i) => (
                       <tr key={i}>
-                        <td style={{ padding: '2px 4px', color: c.accent, fontWeight: 700 }}>h{i+1}</td>
+                        <td style={{ padding: '2px 4px', color: C.accent, fontWeight: 700, fontSize: 9 }}>h{i+1}</td>
                         {row.map((w, j) => {
-                          const dw = grads && step === 5 ? r4(lr * grads.d2[i] * inputs[j]) : null
+                          const delta = grads && step === 5 ? r4(lr * grads.d2[i] * inputs[j]) : null
+                          const hover = hoveredW?.l==='w1' && hoveredW.i===i && hoveredW.j===j
                           return (
                             <td key={j}
-                              onMouseEnter={() => setHoveredWeight({ layer: 1, i, j, value: w, dw })}
-                              onMouseLeave={() => setHoveredWeight(null)}
+                              onMouseEnter={() => setHoveredW({ l:'w1', i, j, v:w, delta })}
+                              onMouseLeave={() => setHoveredW(null)}
                               style={{
-                                padding: '2px 3px', textAlign: 'center', cursor: 'default',
-                                background: hoveredWeight?.layer === 1 && hoveredWeight.i === i && hoveredWeight.j === j ? '#3a3050' : wColor(w),
-                                color: c.text, fontSize: 8, borderRadius: 2,
-                                outline: step === 5 && dw ? `1px solid ${c.orange}` : 'none',
-                                transition: 'background 0.2s',
+                                padding: '2px 2px', textAlign: 'center', borderRadius: 2,
+                                background: hover ? C.tagBg : wBg(w),
+                                color: wColor(w), fontWeight: 600, fontSize: 8,
+                                outline: step===5 && delta ? `1px solid ${C.orange}` : 'none',
+                                transition: 'background 0.15s', cursor: 'default', minWidth: 28,
                               }}>
                               {w.toFixed(2)}
-                              {step === 5 && dw !== null && (
-                                <div style={{ fontSize: 7, color: c.orange }}>{dw > 0 ? '+' : ''}{dw.toFixed(3)}</div>
-                              )}
+                              {step===5 && delta!==null && <div style={{ fontSize: 7, color: C.orange }}>{delta>0?'+':''}{delta.toFixed(3)}</div>}
                             </td>
                           )
                         })}
@@ -532,273 +595,271 @@ export default function BackpropVisualizerPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
-
-            {/* W2 matrix (2×3) */}
-            <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
-              <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>
-                W₂ OUTPUT WEIGHTS (2×3)
-                {step === 5 && <span style={{ color: c.orange, marginLeft: 8 }}>← updating</span>}
+              {/* Bias */}
+              <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+                <span style={{ fontSize: 9, color: C.text3 }}>bias:</span>
+                {weights.b1.map((b, i) => (
+                  <span key={i} style={{ fontSize: 9, color: C.text2, fontFamily: "'DM Mono',monospace" }}>
+                    h{i+1}={b.toFixed(3)}
+                  </span>
+                ))}
               </div>
-              <table style={{ borderCollapse: 'collapse', fontSize: 10, fontFamily: "'DM Mono',monospace" }}>
+            </Card>
+
+            {/* W2 */}
+            <Card style={{ padding: 16 }}>
+              <SectionLabel>
+                W₂ · OUTPUT WEIGHTS&nbsp;
+                <span style={{ fontWeight: 400, color: C.text3 }}>(2 × 3)</span>
+                {step === 5 && <span style={{ color: C.orange, marginLeft: 6 }}>← updating</span>}
+              </SectionLabel>
+              <table style={{ borderCollapse: 'collapse', fontSize: 11, fontFamily: "'DM Mono',monospace", width: '100%' }}>
                 <thead>
                   <tr>
-                    <th style={{ padding: '3px 6px', color: c.text3 }}>out</th>
+                    <th style={{ padding: '3px 6px', color: C.text3, fontWeight: 600, textAlign:'left' }}></th>
                     {['h1','h2','h3'].map(h => (
-                      <th key={h} style={{ padding: '3px 8px', color: c.text3 }}>{h}</th>
+                      <th key={h} style={{ padding: '3px 10px', color: C.text3, fontWeight: 400 }}>{h}</th>
                     ))}
-                    <th style={{ padding: '3px 6px', color: c.text3 }}>bias</th>
+                    <th style={{ padding: '3px 8px', color: C.text3, fontWeight: 400 }}>bias</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {weights.w2.map((row, k) => {
-                    return (
-                      <tr key={k}>
-                        <td style={{ padding: '3px 6px', color: c.accent, fontWeight: 700 }}>out{k}</td>
-                        {row.map((w, i) => {
-                          const dw = grads && step === 5 ? r4(lr * grads.d3[k] * fwd.a2[i]) : null
-                          return (
-                            <td key={i}
-                              onMouseEnter={() => setHoveredWeight({ layer: 2, k, i, value: w, dw })}
-                              onMouseLeave={() => setHoveredWeight(null)}
-                              style={{
-                                padding: '3px 8px', textAlign: 'center', cursor: 'default',
-                                background: hoveredWeight?.layer === 2 && hoveredWeight.k === k && hoveredWeight.i === i ? '#3a3050' : wColor(w),
-                                color: c.text, fontSize: 10, borderRadius: 3,
-                                outline: step === 5 && dw ? `1px solid ${c.orange}` : 'none',
-                                transition: 'background 0.2s',
-                              }}>
-                              {w.toFixed(3)}
-                              {step === 5 && dw !== null && (
-                                <div style={{ fontSize: 8, color: c.orange }}>{dw > 0 ? '+' : ''}{dw.toFixed(4)}</div>
-                              )}
-                            </td>
-                          )
-                        })}
-                        <td style={{ padding: '3px 8px', color: c.text2, fontSize: 10 }}>
-                          {weights.b2[k].toFixed(3)}
-                          {step === 5 && grads && (
-                            <div style={{ fontSize: 8, color: c.orange }}>
-                              {(r4(lr * grads.d3[k]) > 0 ? '+' : '')}{r4(lr * grads.d3[k]).toFixed(4)}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {weights.w2.map((row, k) => (
+                    <tr key={k}>
+                      <td style={{ padding: '4px 6px', color: C.accent, fontWeight: 700 }}>out{k}</td>
+                      {row.map((w, i) => {
+                        const delta = grads && step===5 && fwd ? r4(lr * grads.d3[k] * fwd.a2[i]) : null
+                        const hover = hoveredW?.l==='w2' && hoveredW.k===k && hoveredW.i===i
+                        return (
+                          <td key={i}
+                            onMouseEnter={() => setHoveredW({ l:'w2', k, i, v:w, delta })}
+                            onMouseLeave={() => setHoveredW(null)}
+                            style={{
+                              padding: '4px 10px', textAlign:'center', borderRadius: 4,
+                              background: hover ? C.tagBg : wBg(w),
+                              color: wColor(w), fontWeight: 600,
+                              outline: step===5 && delta ? `1px solid ${C.orange}` : 'none',
+                              transition: 'background 0.15s', cursor: 'default',
+                            }}>
+                            {w.toFixed(3)}
+                            {step===5 && delta!==null && <div style={{fontSize:9, color:C.orange}}>{delta>0?'+':''}{delta.toFixed(4)}</div>}
+                          </td>
+                        )
+                      })}
+                      <td style={{ padding:'4px 8px', color:C.text2 }}>
+                        {weights.b2[k].toFixed(3)}
+                        {step===5 && grads && <div style={{fontSize:9, color:C.orange}}>{r4(lr*grads.d3[k])>0?'+':''}{r4(lr*grads.d3[k]).toFixed(4)}</div>}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
 
-              {/* Hover tooltip */}
-              {hoveredWeight && (
-                <div style={{ marginTop: 8, background: '#3a3050', borderRadius: 6, padding: '6px 10px', fontSize: 10, color: c.text2 }}>
-                  w = {hoveredWeight.value.toFixed(4)}
-                  {hoveredWeight.dw !== null && <span style={{ color: c.orange }}> → Δ={hoveredWeight.dw.toFixed(4)}</span>}
-                </div>
-              )}
-
-              {/* Delta display in backprop step */}
-              {step >= 3 && grads && (
-                <div style={{ marginTop: 10, borderTop: `1px solid ${c.border}`, paddingTop: 8 }}>
-                  <div style={{ fontSize: 9, color: c.orange, letterSpacing: 1, marginBottom: 4 }}>GRADIENTS</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {/* Gradients when available */}
+              {step >= 4 && grads && (
+                <div style={{ marginTop: 10, padding: '8px 10px', background: C.bg3, borderRadius: 8 }}>
+                  <div style={{ fontSize: 9, color: C.orange, fontWeight: 600, letterSpacing: 1, marginBottom: 5 }}>GRADIENTS</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {grads.d3.map((d, k) => (
-                      <div key={k} style={{ background: '#d9770611', borderRadius: 4, padding: '4px 8px', fontSize: 10 }}>
-                        <span style={{ color: c.text3 }}>δ₃[{k}] =</span>
-                        <span style={{ color: c.orange, fontWeight: 700 }}> {d.toFixed(4)}</span>
-                      </div>
+                      <span key={k} style={{ fontSize: 10, fontFamily: "'DM Mono',monospace", color: C.text2 }}>
+                        δ₃[{k}]=<span style={{ color: C.orange, fontWeight: 700 }}>{d.toFixed(4)}</span>
+                      </span>
                     ))}
                     {grads.d2.map((d, i) => (
-                      <div key={i} style={{ background: '#7c6ff711', borderRadius: 4, padding: '4px 8px', fontSize: 10 }}>
-                        <span style={{ color: c.text3 }}>δ₂[{i}] =</span>
-                        <span style={{ color: c.accent, fontWeight: 700 }}> {d.toFixed(4)}</span>
-                      </div>
+                      <span key={i} style={{ fontSize: 10, fontFamily: "'DM Mono',monospace", color: C.text2 }}>
+                        δ₂[{i}]=<span style={{ color: C.accent, fontWeight: 700 }}>{d.toFixed(4)}</span>
+                      </span>
                     ))}
                   </div>
                 </div>
               )}
-            </div>
+
+              {/* Weight hover tooltip */}
+              {hoveredW && (
+                <div style={{ marginTop: 8, padding: '6px 10px', background: C.tagBg, borderRadius: 6, fontSize: 10, color: C.text }}>
+                  w = <strong>{hoveredW.v.toFixed(4)}</strong>
+                  {hoveredW.delta !== null && <span style={{ color: C.orange }}> → Δ = {hoveredW.delta.toFixed(4)}</span>}
+                </div>
+              )}
+            </Card>
           </div>
 
           {/* Loss curve */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 12 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>LOSS CURVE</div>
-            <canvas ref={lossCanvasRef} width={640} height={70} style={{ width: '100%', borderRadius: 6 }} />
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>LOSS CURVE</SectionLabel>
+            <LossCurve history={lossHistory} epoch={epoch} />
             {lossHistory.length === 0 && (
-              <div style={{ fontSize: 10, color: c.text3, textAlign: 'center', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: C.text3, textAlign: 'center', marginTop: 6 }}>
                 학습을 시작하면 Loss 그래프가 표시됩니다
               </div>
             )}
+          </Card>
+
+          {/* Concept cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {[
+              { title:'왜 역전파가 필요한가?', color:C.accent, body:'Weight를 무작위로 수정하면 수백만 번의 시도가 필요합니다. 역전파는 chain rule을 사용해 각 weight가 loss에 얼마나 기여했는지를 단 한 번에 계산합니다.' },
+              { title:'sigmoid의 역할', color:C.orange, body:'σ(z) = 1 / (1+e⁻ᶻ)\n\n임의의 실수를 0~1 범위로 압축합니다. 미분이 σ(1−σ)로 간단해서 역전파 계산이 쉬워집니다.' },
+              { title:'Weight 업데이트 원칙', color:C.green, body:'w_new = w_old + η × δ × a_prev\n\ngradient 방향으로 weight를 수정합니다. learning rate η가 수정 폭을 결정합니다.' },
+            ].map(({ title, color, body }) => (
+              <div key={title} style={{ background:C.bg2, borderRadius:12, padding:'12px 14px', border:`1px solid ${C.border}` }}>
+                <div style={{ fontSize:11, fontWeight:700, color, marginBottom:6 }}>{title}</div>
+                <pre style={{ fontSize:10, color:C.text2, lineHeight:1.7, margin:0, whiteSpace:'pre-wrap', fontFamily:"'DM Mono',monospace" }}>{body}</pre>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* ── RIGHT: Controls ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* ══ RIGHT column ══ */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
           {/* Sample selector */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>TRAINING SAMPLE</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 10 }}>
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>TRAINING SAMPLE</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 12 }}>
               {SAMPLES.map((s, i) => (
                 <button key={i} onClick={() => { setSampleIdx(i); setStep(0) }}
                   style={{
-                    border: `2px solid ${sampleIdx === i ? c.accent : c.border}`,
-                    background: sampleIdx === i ? '#7c6ff722' : c.bg3,
-                    borderRadius: 8, padding: '6px 4px', cursor: 'pointer',
+                    border: `2px solid ${sampleIdx===i ? C.accent : C.border}`,
+                    background: sampleIdx===i ? C.tagBg : C.bg,
+                    borderRadius: 10, padding: '6px 4px', cursor: 'pointer',
                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
                     transition: 'all 0.2s',
                   }}>
-                  <PixelGrid pixels={s.pixels} highlight={sampleIdx === i} />
-                  <span style={{ fontSize: 9, color: sampleIdx === i ? c.accent : c.text3, fontWeight: 700 }}>
-                    "{s.label}"
-                  </span>
+                  <PixelGrid pixels={s.pixels} size='sm' highlightOn={sampleIdx===i} />
+                  <span style={{ fontSize: 10, color: sampleIdx===i ? C.accent : C.text3, fontWeight: 700 }}>"{s.label}"</span>
                 </button>
               ))}
             </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <div style={{ background: c.bg3, borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
-                <div style={{ fontSize: 8, color: c.text3, marginBottom: 2 }}>TARGET</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: c.accent }}>
+              <div style={{ background: C.bg3, borderRadius: 10, padding: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 9, color: C.text3, marginBottom: 3, letterSpacing: 1 }}>TARGET</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.accent, fontFamily: "'DM Mono',monospace" }}>
                   [{target.join(', ')}]
                 </div>
-                <div style={{ fontSize: 9, color: c.text3 }}>숫자 "{sample.label}"</div>
+                <div style={{ fontSize: 10, color: C.text3, marginTop: 2 }}>숫자 "{sample.label}"</div>
               </div>
-              <div style={{ background: c.bg3, borderRadius: 8, padding: '8px 10px', textAlign: 'center', border: `1px solid ${isCorrect ? c.green : c.red}` }}>
-                <div style={{ fontSize: 8, color: c.text3, marginBottom: 2 }}>PREDICTION</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: isCorrect ? c.green : c.red }}>
-                  [{out.map(v => r3(v)).join(', ')}]
-                </div>
-                <div style={{ fontSize: 9, color: isCorrect ? c.green : c.red }}>
-                  {isCorrect ? '✓ Correct' : '✗ Wrong'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Step-by-step control */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>STEP CONTROL</div>
-            <button onClick={nextStep} disabled={autoRunning}
-              style={{
-                width: '100%', padding: '12px', borderRadius: 8, cursor: autoRunning ? 'not-allowed' : 'pointer',
-                background: '#7c6ff7', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700,
-                letterSpacing: 1, marginBottom: 8, opacity: autoRunning ? 0.5 : 1,
-                boxShadow: '0 2px 12px #7c6ff744', transition: 'all 0.2s',
+              <div style={{
+                background: step >= 2 ? (isCorrect ? '#ecfdf5' : '#fff1f2') : C.bg3,
+                borderRadius: 10, padding: '10px', textAlign: 'center',
+                border: `1.5px solid ${step >= 2 ? (isCorrect ? '#86efac' : '#fca5a5') : C.border}`,
+                transition: 'all 0.3s',
               }}>
-              {step === 5 ? '↺ APPLY & NEXT SAMPLE' : `▶ NEXT STEP → ${STEP_LABELS[step + 1]?.title ?? ''}`}
-            </button>
-            <div style={{ fontSize: 9, color: c.text3, background: c.bg3, borderRadius: 6, padding: '6px 10px', lineHeight: 1.7 }}>
-              현재: <span style={{ color: c.accent }}>{STEP_LABELS[step]?.title}</span>
-              {step < 5 && <> → 다음: <span style={{ color: c.text }}>{STEP_LABELS[step + 1]?.title}</span></>}
+                <div style={{ fontSize: 9, color: C.text3, marginBottom: 3, letterSpacing: 1 }}>PREDICTION</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: step>=2 ? (isCorrect?C.green:C.danger) : C.text3, fontFamily: "'DM Mono',monospace" }}>
+                  {step >= 2 ? `[${out.map(v=>r3(v)).join(', ')}]` : '[—, —]'}
+                </div>
+                <div style={{ fontSize: 10, color: step>=2?(isCorrect?C.green:C.danger):C.text3, marginTop: 2, fontWeight: 600 }}>
+                  {step >= 2 ? (isCorrect ? '✓ Correct' : '✗ Wrong') : ''}
+                </div>
+              </div>
             </div>
-          </div>
+          </Card>
+
+          {/* Step control */}
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>STEP-BY-STEP</SectionLabel>
+            <Btn onClick={nextStep} disabled={autoRunning} variant='primary' style={{ width: '100%', marginBottom: 8, fontSize: 13 }}>
+              {step === 5 ? '↺ Apply & Next Sample' : `▶ Next → ${STEP_META[Math.min(step+1,5)].label}`}
+            </Btn>
+            <div style={{ fontSize: 10, color: C.text3, textAlign: 'center', padding: '4px 8px', background: C.bg3, borderRadius: 6 }}>
+              현재 <span style={{ color:C.accent, fontWeight:600 }}>{STEP_META[step].label}</span>
+              {step < 5 && <> → 다음 <span style={{ color:C.text, fontWeight:500 }}>{STEP_META[step+1].label}</span></>}
+            </div>
+          </Card>
 
           {/* Auto train */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 10 }}>AUTO TRAIN</div>
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>AUTO TRAIN</SectionLabel>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <button onClick={trainOneEpoch} disabled={autoRunning}
-                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.accent}`, color: c.accent, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+              <Btn onClick={trainOneEpoch} disabled={autoRunning} variant='green' style={{ width:'100%' }}>
                 ⚡ Train 1 Epoch (10 samples)
-              </button>
-              <button onClick={() => trainN(100)} disabled={autoRunning}
-                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.green}`, color: c.green, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+              </Btn>
+              <Btn onClick={() => trainN(100)} disabled={autoRunning} variant='outline' style={{ width:'100%' }}>
                 🚀 Train 100 Epochs
-              </button>
-              <button onClick={() => trainN(1000)} disabled={autoRunning}
-                style={{ padding: '9px', borderRadius: 7, cursor: autoRunning ? 'not-allowed' : 'pointer', background: '#22193a', border: `1px solid ${c.orange}`, color: c.orange, fontSize: 11, fontWeight: 600, opacity: autoRunning ? 0.5 : 1, transition: 'all 0.2s' }}>
+              </Btn>
+              <Btn onClick={() => trainN(1000)} disabled={autoRunning} variant='orange' style={{ width:'100%' }}>
                 ⚡ Train 1000 Epochs
-              </button>
-              {autoRunning && (
-                <button onClick={() => { autoRef.current = false; setAutoRunning(false) }}
-                  style={{ padding: '9px', borderRadius: 7, cursor: 'pointer', background: '#dc262622', border: `1px solid ${c.red}`, color: c.red, fontSize: 11, fontWeight: 600 }}>
-                  ⬛ STOP
-                </button>
+              </Btn>
+              {autoRunning ? (
+                <Btn onClick={() => { autoRef.current=false; setAutoRunning(false) }} variant='danger' style={{ width:'100%' }}>
+                  ⬛ Stop
+                </Btn>
+              ) : (
+                <Btn onClick={resetAll} variant='ghost' style={{ width:'100%' }}>
+                  ↺ Reset Weights
+                </Btn>
               )}
-              <button onClick={resetAll}
-                style={{ padding: '8px', borderRadius: 7, cursor: 'pointer', background: 'transparent', border: `1px solid ${c.border}`, color: c.text2, fontSize: 10 }}>
-                ↺ Reset Weights
-              </button>
             </div>
             {autoRunning && (
-              <div style={{ marginTop: 8, fontSize: 10, color: c.orange, textAlign: 'center' }}>
-                학습 중... epoch {epoch}
+              <div style={{ marginTop: 8, fontSize: 11, color: C.orange, textAlign:'center' }}>
+                학습 중… epoch {epoch}
               </div>
             )}
-          </div>
+          </Card>
 
           {/* Learning rate */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 6 }}>LEARNING RATE η</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: c.orange, marginBottom: 6 }}>{lr.toFixed(2)}</div>
-            <input type="range" min="0.01" max="1.0" step="0.01" value={lr}
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>LEARNING RATE η</SectionLabel>
+            <div style={{ fontSize: 26, fontWeight: 800, color: C.orange, marginBottom: 6, fontFamily:"'DM Mono',monospace" }}>
+              {lr.toFixed(2)}
+            </div>
+            <input type='range' min='0.01' max='1.0' step='0.01' value={lr}
               onChange={e => setLr(Number(e.target.value))}
-              style={{ width: '100%', marginBottom: 6 }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: c.text3, marginBottom: 6 }}>
-              <span>0.01</span><span>0.2 (Excel)</span><span>1.0</span>
+              style={{ width:'100%', marginBottom: 6 }} />
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:C.text3, marginBottom:8 }}>
+              <span>0.01</span><span style={{color:C.accent}}>0.2 Excel 기본값</span><span>1.0</span>
             </div>
             <div style={{
-              fontSize: 10, padding: '5px 8px', borderRadius: 5,
-              background: lr > 0.5 ? '#dc262611' : lr < 0.05 ? '#22c55e11' : '#7c6ff711',
-              color: lr > 0.5 ? c.red : lr < 0.05 ? c.green : c.text2,
-              borderLeft: `2px solid ${lr > 0.5 ? c.red : lr < 0.05 ? c.green : c.accent}`,
+              fontSize:10, padding:'6px 10px', borderRadius:8,
+              background: lr > 0.5 ? '#fff1f2' : lr < 0.05 ? '#ecfdf5' : C.tagBg,
+              color: lr > 0.5 ? C.danger : lr < 0.05 ? C.green : C.accent,
+              borderLeft: `2px solid ${lr > 0.5 ? C.danger : lr < 0.05 ? C.green : C.accent}`,
             }}>
-              {lr > 0.5 ? '⚠ 크면 발산할 수 있습니다' : lr < 0.05 ? '매우 느리게 수렴합니다' : `Excel 예제 기본값: 0.2`}
+              {lr > 0.5 ? '⚠ 크면 발산할 수 있습니다' : lr < 0.05 ? '매우 느리게 수렴합니다' : 'Excel 예제 권장값 (η = 0.2)'}
             </div>
-          </div>
+          </Card>
 
-          {/* Formula box */}
-          <FormulaBox step={Math.min(
-            step === 0 ? 0 : step === 1 ? 1 : step === 2 ? 2 : step === 2 ? 3 : step === 3 ? 4 : step === 4 ? 5 : 7,
-            FORMULAS.length - 1
-          )} />
+          {/* Formula */}
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>FORMULA · {formula.label}</SectionLabel>
+            <div style={{ background: C.bg3, borderRadius: 10, padding: '12px 14px' }}>
+              <pre style={{ fontSize:12, color:C.accent, fontFamily:"'DM Mono',monospace", margin:0, whiteSpace:'pre-wrap', lineHeight:1.9, fontWeight:600 }}>
+                {formula.expr}
+              </pre>
+            </div>
+          </Card>
 
           {/* Stats */}
-          <div style={{ background: c.bg2, borderRadius: 12, border: `1px solid ${c.border}`, padding: 14 }}>
-            <div style={{ fontSize: 9, color: c.text3, letterSpacing: 2, marginBottom: 8 }}>STATISTICS</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-              <div style={{ background: c.bg3, borderRadius: 6, padding: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: 8, color: c.text3 }}>EPOCH</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: c.accent }}>{epoch}</div>
+          <Card style={{ padding: 16 }}>
+            <SectionLabel>STATISTICS</SectionLabel>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+              <div style={{ background:C.bg3, borderRadius:8, padding:'8px', textAlign:'center' }}>
+                <div style={{ fontSize:9, color:C.text3, marginBottom:2 }}>EPOCH</div>
+                <div style={{ fontSize:20, fontWeight:800, color:C.accent, fontFamily:"'DM Mono',monospace" }}>{epoch}</div>
               </div>
-              <div style={{ background: c.bg3, borderRadius: 6, padding: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: 8, color: c.text3 }}>LOSS</div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: totalLoss !== null && totalLoss < 0.05 ? c.green : c.red }}>
-                  {lossHistory.length > 0 ? lossHistory[lossHistory.length - 1].toFixed(4) : '—'}
+              <div style={{ background:C.bg3, borderRadius:8, padding:'8px', textAlign:'center' }}>
+                <div style={{ fontSize:9, color:C.text3, marginBottom:2 }}>LOSS</div>
+                <div style={{ fontSize:16, fontWeight:800, fontFamily:"'DM Mono',monospace",
+                  color: lossHistory.length>0 && lossHistory[lossHistory.length-1]<0.05 ? C.green : C.danger }}>
+                  {lossHistory.length>0 ? lossHistory[lossHistory.length-1].toFixed(4) : '—'}
                 </div>
               </div>
             </div>
-
-            {/* Accuracy check across all samples */}
-            {epoch > 0 && (() => {
-              const correct = SAMPLES.filter(s => {
-                const f = forward(s.pixels, weights.w1, weights.b1, weights.w2, weights.b2)
-                const p = f.a3[0] > f.a3[1] ? 0 : 1
-                return p === parseInt(s.label)
-              }).length
-              return (
-                <div style={{ marginTop: 8, background: correct === SAMPLES.length ? '#22c55e11' : '#dc262611', borderRadius: 6, padding: '6px 10px', fontSize: 10, textAlign: 'center', color: correct === SAMPLES.length ? c.green : c.text2 }}>
-                  정확도: {correct}/{SAMPLES.length} 샘플 정답
-                  {correct === SAMPLES.length && <span style={{ color: c.green }}> 🎉 완벽!</span>}
-                </div>
-              )
-            })()}
-          </div>
+            {accuracy && (
+              <div style={{
+                padding:'8px 10px', borderRadius:8, textAlign:'center', fontSize:11, fontWeight:600,
+                background: accuracy==='10/10' ? '#ecfdf5' : C.bg3,
+                color: accuracy==='10/10' ? C.green : C.text2,
+                border: `1.5px solid ${accuracy==='10/10' ? '#86efac' : C.border}`,
+              }}>
+                정확도: {accuracy} 샘플 정답
+                {accuracy==='10/10' && <span style={{marginLeft:6}}>🎉</span>}
+              </div>
+            )}
+          </Card>
         </div>
-      </div>
-
-      {/* ── Bottom: concept cards ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 14 }}>
-        {[
-          { title: '왜 역전파가 필요한가?', color: c.accent, body: 'weight를 무작위로 수정하면 수백만 번의 시도가 필요합니다. 역전파는 각 weight가 loss에 얼마나 기여했는지를 chain rule로 정확히 계산합니다.' },
-          { title: 'sigmoid의 역할', color: c.orange, body: 'σ(z) = 1/(1+e⁻ᶻ) — 임의의 실수를 0~1 범위로 압축합니다. 미분이 σ(1-σ)로 간단해서 역전파 계산이 쉬워집니다.' },
-          { title: 'weight 업데이트 원칙', color: c.green, body: 'w_new = w_old + η · δ · a_prev\ngradient 반대 방향으로 weight를 수정합니다. learning rate η가 수정 폭을 결정합니다.' },
-        ].map(({ title, color, body }) => (
-          <div key={title} style={{ background: c.bg2, borderRadius: 10, padding: '12px 14px', border: `1px solid ${c.border}` }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color, marginBottom: 6 }}>{title}</div>
-            <pre style={{ fontSize: 10, color: c.text2, lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap', fontFamily: "'DM Mono',monospace" }}>{body}</pre>
-          </div>
-        ))}
       </div>
     </div>
   )
