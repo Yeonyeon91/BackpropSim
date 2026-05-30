@@ -609,30 +609,9 @@ export default function BackpropVisualizerPage() {
 
         {/* Network diagram */}
         <Card style={{padding:20}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:8}}>
-            <Lbl style={{marginBottom:0}}>NEURAL NETWORK  12 → 3 → 2</Lbl>
-            <div style={{display:'flex',alignItems:'center',gap:8}}>
-              {ep>0&&acc&&(
-                <div style={{
-                  padding:'3px 10px',borderRadius:99,fontSize:10,fontWeight:700,
-                  background:acc===`${SAMPLES.length}/${SAMPLES.length}`?'#ecfdf5':C.tagBg,
-                  color:acc===`${SAMPLES.length}/${SAMPLES.length}`?C.green:C.accent,
-                  border:`1.5px solid ${acc===`${SAMPLES.length}/${SAMPLES.length}`?'#86efac':C.accent}`,
-                }}>ACC {acc}</div>
-              )}
-              <div style={{
-                display:'flex',alignItems:'center',gap:6,
-                background:C.bg3,borderRadius:99,padding:'4px 14px',
-              }}>
-                <span style={{fontSize:10,color:C.text3,fontWeight:600,letterSpacing:.5}}>EPOCH</span>
-                <span style={{fontSize:16,fontWeight:800,color:C.accent,fontFamily:"'DM Mono',monospace",lineHeight:1}}>
-                  {ep}
-                </span>
-              </div>
-            </div>
-          </div>
+          <Lbl>NEURAL NETWORK  12 → 3 → 2</Lbl>
           <div style={{overflowX:'auto'}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:12,minWidth:480}}>
+            <div style={{display:'flex',alignItems:'center',gap:12,minWidth:480}}>
 
               {/* INPUT */}
               <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,flexShrink:0}}>
