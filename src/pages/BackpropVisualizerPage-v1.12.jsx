@@ -103,14 +103,50 @@ const sig  = x => 1 / (1 + Math.exp(-x))
 const r4   = v => Math.round(v * 10000) / 10000
 const r3   = v => Math.round(v * 1000)  / 1000
 
+
+// Excel 파일(학습 시트 D10:G23)에 저장된 초기 weight/bias 값
+// 구조: 12 input → 3 hidden → 2 output
+const EXCEL_INITIAL_WEIGHTS = {
+  // 현재 사용자가 보여준 Excel 화면의 w,b 초기값과 동일하게 고정
+  // Excel의 RAND/NORM.INV 계열 초기값은 파일을 열 때마다 바뀔 수 있어서,
+  // 화면에 나온 값을 그대로 하드코딩해야 웹 결과와 Excel 결과가 일치한다.
+  w1: [
+    [
+      -0.462, 0.632, 0.738,
+      -0.664, 0.518, -0.618,
+      0.329, -0.833, -0.313,
+      0.980, 0.270, 0.410,
+    ],
+    [
+      -1.186, -0.372, 0.131,
+      0.982, 0.304, -2.019,
+      -1.746, 0.240, 0.312,
+      0.630, 0.484, -1.575,
+    ],
+    [
+      -0.010, -0.634, 0.868,
+      -0.929, 0.547, 1.076,
+      -1.295, -0.194, -0.578,
+      1.414, 0.353, -1.814,
+    ],
+  ],
+  b1: [-0.669, -0.046, -0.314],
+  w2: [
+    [0.799, 0.335, -0.105],
+    [0.273, 2.069, -0.107],
+  ],
+  b2: [-0.943, -1.100],
+}
+
+const cloneWeights = w => ({
+  w1: w.w1.map(row => [...row]),
+  b1: [...w.b1],
+  w2: w.w2.map(row => [...row]),
+  b2: [...w.b2],
+})
+
 function mkWeights() {
-  const r = () => r4((Math.random() - .5) * 2)
-  return {
-    w1: Array.from({length:3}, () => Array.from({length:12}, r)),
-    b1: Array.from({length:3}, r),
-    w2: Array.from({length:2}, () => Array.from({length:3}, r)),
-    b2: Array.from({length:2}, r),
-  }
+  return cloneWeights(EXCEL_INITIAL_WEIGHTS)
 }
 
 function fwdPass(x, {w1,b1,w2,b2}) {
@@ -135,6 +171,45 @@ function updateW({w1,b1,w2,b2}, x, a2, {d2,d3}, lr) {
     w2: w2.map((row,k) => row.map((w,i) => r4(w + lr*d3[k]*a2[i]))),
     b2: b2.map((b,k)   => r4(b + lr*d3[k])),
   }
+}
+
+function excelBatchUpdate(w, lr) {
+  // Excel 학습 시트 방식:
+  // 1) 현재 weight로 64개 전체 샘플의 ∂C/∂w, ∂C/∂b를 모두 계산
+  // 2) 그 기울기를 전부 합산
+  // 3) 마지막에 한 번만 w_new = w_old - η·∂CT/∂w 적용
+  // 현재 gradsOf()의 d2/d3는 -(∂C/∂z)이므로 update는 + lr * d 로 적용하면 Excel의 w - η∂C와 같음.
+  const sum = {
+    w1: Array.from({length:3}, () => Array(12).fill(0)),
+    b1: Array(3).fill(0),
+    w2: Array.from({length:2}, () => Array(3).fill(0)),
+    b2: Array(2).fill(0),
+  }
+  let loss = 0
+
+  for (const s of SAMPLES) {
+    const f = fwdPass(s.pixels, w)
+    const g = gradsOf(s.pixels, f.a2, f.a3, s.target, w.w2)
+    loss += g.loss
+
+    for (let i=0; i<3; i++) {
+      for (let j=0; j<12; j++) sum.w1[i][j] += g.d2[i] * s.pixels[j]
+      sum.b1[i] += g.d2[i]
+    }
+    for (let k=0; k<2; k++) {
+      for (let i=0; i<3; i++) sum.w2[k][i] += g.d3[k] * f.a2[i]
+      sum.b2[k] += g.d3[k]
+    }
+  }
+
+  const next = {
+    w1: w.w1.map((row,i) => row.map((v,j) => r4(v + lr * sum.w1[i][j]))),
+    b1: w.b1.map((v,i) => r4(v + lr * sum.b1[i])),
+    w2: w.w2.map((row,k) => row.map((v,i) => r4(v + lr * sum.w2[k][i]))),
+    b2: w.b2.map((v,k) => r4(v + lr * sum.b2[k])),
+  }
+
+  return { w: next, loss: r4(loss) }
 }
 
 // ─── Primitive UI ─────────────────────────────────────────────────────────────
@@ -306,26 +381,24 @@ export default function BackpropVisualizerPage() {
       setGr(g); setHist(h=>[...h.slice(-299),g.loss]); setStep(4); return
     }
     if(step===4){ setStep(5); return }
-    const g = gr ?? gradsOf(inp,fwd.a2,fwd.a3,tgt,W.w2)
-    setW(updateW(W,inp,fwd.a2,g,lr)); setEp(e=>e+1); setStep(0)
+    const res = excelBatchUpdate(W, lr)
+    setW(res.w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),res.loss]); setStep(0)
   }
 
   function train1() {
-    let w=W, loss=0
-    for(const s of SAMPLES){ const f=fwdPass(s.pixels,w); const g=gradsOf(s.pixels,f.a2,f.a3,s.target,w.w2); w=updateW(w,s.pixels,f.a2,g,lr); loss+=g.loss }
-    setW(w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),r4(loss/SAMPLES.length)]); setStep(0)
+    const res = excelBatchUpdate(W, lr)
+    setW(res.w); setEp(e=>e+1); setHist(h=>[...h.slice(-299),res.loss]); setStep(0)
   }
 
   async function trainN(n) {
     autoRef.current=true; setAuto(true)
-    let w=W, count=0
+    let w=W, count=0, loss=0
     while(autoRef.current && count<n){
-      let loss=0
-      for(const s of SAMPLES){ const f=fwdPass(s.pixels,w); const g=gradsOf(s.pixels,f.a2,f.a3,s.target,w.w2); w=updateW(w,s.pixels,f.a2,g,lr); loss+=g.loss }
-      count++
-      if(count%20===0){ setW({...w}); setEp(e=>e+20); setHist(h=>[...h.slice(-299),r4(loss/SAMPLES.length)]); await new Promise(r=>setTimeout(r,1)) }
+      const res = excelBatchUpdate(w, lr)
+      w = res.w; loss = res.loss; count++
+      if(count%20===0){ setW({...w}); setEp(e=>e+20); setHist(h=>[...h.slice(-299),loss]); await new Promise(r=>setTimeout(r,1)) }
     }
-    setW({...w}); setEp(e=>e+count%20); autoRef.current=false; setAuto(false)
+    setW({...w}); setEp(e=>e+count%20); setHist(h=>[...h.slice(-299),loss]); autoRef.current=false; setAuto(false)
   }
 
   function reset() { autoRef.current=false; setAuto(false); setW(mkWeights()); setFwd(null); setGr(null); setStep(0); setHist([]); setEp(0) }
@@ -339,6 +412,7 @@ export default function BackpropVisualizerPage() {
     const n = SAMPLES.filter(s=>{ const f=fwdPass(s.pixels,W); return (f.a3[0]>f.a3[1]?0:1)===parseInt(s.label) }).length
     return `${n}/${SAMPLES.length}`
   })()
+  const fullAcc = `${SAMPLES.length}/${SAMPLES.length}`
 
   return (
     /* Flex row: LEFT=main content  RIGHT=sidebar */
@@ -357,7 +431,7 @@ export default function BackpropVisualizerPage() {
             <Tag bg='#ecfdf5' color={C.green}>12 → 3 → 2</Tag>
           </div>
           <p style={{fontSize:13,color:C.text2,margin:0,lineHeight:1.6}}>
-            Excel 예제의 역전파 계산 과정을 웹에서 단계별로 재현합니다.
+            Excel 예제처럼 64개 전체 샘플의 기울기를 합산한 뒤 한 번에 weight를 갱신합니다.
             4×3 픽셀 입력 → 은닉층 3개 → 출력층 2개 → 숫자 0 또는 1 예측.
           </p>
         </div>
@@ -753,7 +827,7 @@ export default function BackpropVisualizerPage() {
             <Btn onClick={()=>trainN(1000)} disabled={auto} variant='orange'>⚡ Train 1000 Epochs</Btn>
             {auto
               ? <Btn onClick={()=>{autoRef.current=false;setAuto(false)}} variant='danger'>⬛ Stop</Btn>
-              : <Btn onClick={reset} variant='ghost'>↺ Reset Weights</Btn>
+              : <Btn onClick={reset} variant='ghost'>↺ Reset Excel Weights</Btn>
             }
           </div>
           {auto && <div style={{marginTop:8,fontSize:11,color:C.orange,textAlign:'center'}}>학습 중… epoch {ep}</div>}
@@ -806,11 +880,11 @@ export default function BackpropVisualizerPage() {
           {acc&&(
             <div style={{
               padding:'8px 10px',borderRadius:8,textAlign:'center',fontSize:11,fontWeight:600,
-              background:acc==='10/10'?'#ecfdf5':C.bg3,
-              color:acc==='10/10'?C.green:C.text2,
-              border:`1.5px solid ${acc==='10/10'?'#86efac':C.border}`,
+              background:acc===fullAcc?'#ecfdf5':C.bg3,
+              color:acc===fullAcc?C.green:C.text2,
+              border:`1.5px solid ${acc===fullAcc?'#86efac':C.border}`,
             }}>
-              정확도: {acc} 샘플 정답 {acc==='10/10'&&'🎉'}
+              정확도: {acc} 샘플 정답 {acc===fullAcc&&'🎉'}
             </div>
           )}
         </Card>
