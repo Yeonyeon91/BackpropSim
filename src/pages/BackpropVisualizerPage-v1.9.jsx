@@ -103,47 +103,14 @@ const sig  = x => 1 / (1 + Math.exp(-x))
 const r4   = v => Math.round(v * 10000) / 10000
 const r3   = v => Math.round(v * 1000)  / 1000
 
-
-// Excel 파일(학습 시트 D10:G23)에 저장된 초기 weight/bias 값
-// 구조: 12 input → 3 hidden → 2 output
-const EXCEL_INITIAL_WEIGHTS = {
-  w1: [
-    [
-      -0.7662912078539892, -0.2002319017639525, -1.2061222624394958,
-      -1.860448463246002, 0.2779302770948093, 1.5911183267883555,
-      -1.8986789243069033, 0.7593439143686518, 1.5547335749483917,
-      -1.3152416189470966, 1.306085322592926, 1.5881833564357721,
-    ],
-    [
-      0.21327949739343166, -2.2356402349896984, 1.419021510402004,
-      0.2061348094297382, 1.3009446696326856, -0.5937046335222662,
-      0.6329344391126343, -0.8019223509993673, -0.43986482995725723,
-      -0.1721825405405802, -0.004590672412840634, -1.0404727760739523,
-    ],
-    [
-      0.6680406976741948, 1.0269556209330306, 0.16256975960184453,
-      0.7620249454946173, 0.24790236296932336, -0.8765350066191142,
-      -0.6711460036339985, -0.27411482846644614, 0.4586750608887566,
-      -0.7345569185072032, 0.6900548771325012, 0.2604719612040797,
-    ],
-  ],
-  b1: [0.9617055993487009, 0.04651573398501607, -0.6390545209690237],
-  w2: [
-    [-0.2924083441167082, -0.080571556699421, 0.09417198276106173],
-    [0.983557703669495, 0.7839926257861014, -0.05746569806671908],
-  ],
-  b2: [0.0012576019029083704, -1.4670967386579588],
-}
-
-const cloneWeights = w => ({
-  w1: w.w1.map(row => [...row]),
-  b1: [...w.b1],
-  w2: w.w2.map(row => [...row]),
-  b2: [...w.b2],
-})
-
 function mkWeights() {
-  return cloneWeights(EXCEL_INITIAL_WEIGHTS)
+  const r = () => r4((Math.random() - .5) * 2)
+  return {
+    w1: Array.from({length:3}, () => Array.from({length:12}, r)),
+    b1: Array.from({length:3}, r),
+    w2: Array.from({length:2}, () => Array.from({length:3}, r)),
+    b2: Array.from({length:2}, r),
+  }
 }
 
 function fwdPass(x, {w1,b1,w2,b2}) {
@@ -372,7 +339,6 @@ export default function BackpropVisualizerPage() {
     const n = SAMPLES.filter(s=>{ const f=fwdPass(s.pixels,W); return (f.a3[0]>f.a3[1]?0:1)===parseInt(s.label) }).length
     return `${n}/${SAMPLES.length}`
   })()
-  const fullAcc = `${SAMPLES.length}/${SAMPLES.length}`
 
   return (
     /* Flex row: LEFT=main content  RIGHT=sidebar */
@@ -787,7 +753,7 @@ export default function BackpropVisualizerPage() {
             <Btn onClick={()=>trainN(1000)} disabled={auto} variant='orange'>⚡ Train 1000 Epochs</Btn>
             {auto
               ? <Btn onClick={()=>{autoRef.current=false;setAuto(false)}} variant='danger'>⬛ Stop</Btn>
-              : <Btn onClick={reset} variant='ghost'>↺ Reset Excel Weights</Btn>
+              : <Btn onClick={reset} variant='ghost'>↺ Reset Weights</Btn>
             }
           </div>
           {auto && <div style={{marginTop:8,fontSize:11,color:C.orange,textAlign:'center'}}>학습 중… epoch {ep}</div>}
@@ -840,11 +806,11 @@ export default function BackpropVisualizerPage() {
           {acc&&(
             <div style={{
               padding:'8px 10px',borderRadius:8,textAlign:'center',fontSize:11,fontWeight:600,
-              background:acc===fullAcc?'#ecfdf5':C.bg3,
-              color:acc===fullAcc?C.green:C.text2,
-              border:`1.5px solid ${acc===fullAcc?'#86efac':C.border}`,
+              background:acc==='10/10'?'#ecfdf5':C.bg3,
+              color:acc==='10/10'?C.green:C.text2,
+              border:`1.5px solid ${acc==='10/10'?'#86efac':C.border}`,
             }}>
-              정확도: {acc} 샘플 정답 {acc===fullAcc&&'🎉'}
+              정확도: {acc} 샘플 정답 {acc==='10/10'&&'🎉'}
             </div>
           )}
         </Card>
